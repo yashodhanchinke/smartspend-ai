@@ -11,6 +11,7 @@ import LoginScreen from "../screens/LoginScreen";
 import RegisterScreen from "../screens/RegisterScreen";
 import BottomTabs from "./BottomTabs";
 
+import AddAccountScreen from "../screens/AddAccountScreen";
 import AddCategoryScreen from "../screens/AddCategoryScreen";
 import AddTransactionScreen from "../screens/AddTransactionScreen";
 import AnalyticsScreen from "../screens/AnalyticsScreen";
@@ -22,6 +23,7 @@ import LabelsScreen from "../screens/LabelsScreen";
 import LoansScreen from "../screens/LoansScreen";
 import RecurringScreen from "../screens/RecurringScreen";
 import TransactionsScreen from "../screens/TransactionsScreen";
+
 
 const Stack = createNativeStackNavigator();
 
@@ -74,6 +76,8 @@ export default function AppNavigator() {
             <Stack.Screen name="Analytics" component={AnalyticsScreen} />
             <Stack.Screen name="Weekly Summary" component={TransactionsScreen} />
             <Stack.Screen name="AddCategory" component={AddCategoryScreen} />
+            <Stack.Screen name="AddAccount" component={AddAccountScreen} />
+
           </>
         )}
       </Stack.Navigator>

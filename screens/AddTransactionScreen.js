@@ -9,7 +9,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
@@ -30,7 +30,8 @@ export default function AddTransactionScreen({ navigation }) {
   const [transferAccount, setTransferAccount] = useState(null);
 
   const [date, setDate] = useState(new Date());
-  const [showPicker, setShowPicker] = useState(false);
+  const [showDate, setShowDate] = useState(false);
+  const [showTime, setShowTime] = useState(false);
 
   const [loading, setLoading] = useState(false);
 
@@ -56,6 +57,25 @@ export default function AddTransactionScreen({ navigation }) {
       .eq("type", type);
 
     setCategories(data || []);
+  };
+
+  /* ================= DATE HANDLERS ================= */
+
+  const onDateChange = (event, selectedDate) => {
+    setShowDate(false);
+    if (selectedDate) {
+      setDate(selectedDate);
+    }
+  };
+
+  const onTimeChange = (event, selectedTime) => {
+    setShowTime(false);
+    if (selectedTime) {
+      const newDate = new Date(date);
+      newDate.setHours(selectedTime.getHours());
+      newDate.setMinutes(selectedTime.getMinutes());
+      setDate(newDate);
+    }
   };
 
   /* ================= SAVE ================= */
@@ -84,20 +104,17 @@ export default function AddTransactionScreen({ navigation }) {
 
     const parsedAmount = parseFloat(amount);
 
-    /* ===== INSERT TRANSACTION ===== */
-
     const { error } = await supabase.from("transactions").insert([
       {
         user_id: user.id,
         account_id: selectedAccount.id,
-        category_id:
-          type === "transfer" ? null : selectedCategory.id,
+        category_id: type === "transfer" ? null : selectedCategory.id,
         type,
         title,
         amount: parsedAmount,
         description,
         date: date.toISOString().split("T")[0],
-        time: date.toLocaleTimeString(),
+        time: date.toTimeString().split(" ")[0],
       },
     ]);
 
@@ -107,39 +124,31 @@ export default function AddTransactionScreen({ navigation }) {
       return;
     }
 
-    /* ===== BALANCE LOGIC ===== */
+    /* ===== BALANCE UPDATE ===== */
 
     if (type === "expense") {
       await supabase
         .from("accounts")
-        .update({
-          balance: selectedAccount.balance - parsedAmount,
-        })
+        .update({ balance: selectedAccount.balance - parsedAmount })
         .eq("id", selectedAccount.id);
     }
 
     if (type === "income") {
       await supabase
         .from("accounts")
-        .update({
-          balance: selectedAccount.balance + parsedAmount,
-        })
+        .update({ balance: selectedAccount.balance + parsedAmount })
         .eq("id", selectedAccount.id);
     }
 
     if (type === "transfer") {
       await supabase
         .from("accounts")
-        .update({
-          balance: selectedAccount.balance - parsedAmount,
-        })
+        .update({ balance: selectedAccount.balance - parsedAmount })
         .eq("id", selectedAccount.id);
 
       await supabase
         .from("accounts")
-        .update({
-          balance: transferAccount.balance + parsedAmount,
-        })
+        .update({ balance: transferAccount.balance + parsedAmount })
         .eq("id", transferAccount.id);
     }
 
@@ -160,18 +169,10 @@ export default function AddTransactionScreen({ navigation }) {
           {["expense", "income", "transfer"].map((t) => (
             <TouchableOpacity
               key={t}
-              style={[
-                styles.typeBtn,
-                type === t && styles.typeActive,
-              ]}
+              style={[styles.typeBtn, type === t && styles.typeActive]}
               onPress={() => setType(t)}
             >
-              <Text
-                style={{
-                  color: type === t ? "#000" : "#fff",
-                  fontWeight: "600",
-                }}
-              >
+              <Text style={{ color: type === t ? "#000" : "#fff", fontWeight: "600" }}>
                 {t.toUpperCase()}
               </Text>
             </TouchableOpacity>
@@ -197,77 +198,53 @@ export default function AddTransactionScreen({ navigation }) {
           onChangeText={setAmount}
         />
 
-        {/* DATE TIME */}
-        <TouchableOpacity
-          style={styles.input}
-          onPress={() => setShowPicker(true)}
-        >
-          <Text style={{ color: "#fff" }}>
-            {date.toLocaleDateString()} - {date.toLocaleTimeString()}
-          </Text>
+        {/* DATE */}
+        <TouchableOpacity style={styles.input} onPress={() => setShowDate(true)}>
+          <Text style={{ color: "#fff" }}>{date.toLocaleDateString()}</Text>
         </TouchableOpacity>
 
-        {showPicker && (
-          <DateTimePicker
-            value={date}
-            mode="datetime"
-            display="default"
-            onChange={(event, selectedDate) => {
-              setShowPicker(false);
-              if (selectedDate) setDate(selectedDate);
-            }}
-          />
+        {/* TIME */}
+        <TouchableOpacity style={styles.input} onPress={() => setShowTime(true)}>
+          <Text style={{ color: "#fff" }}>{date.toLocaleTimeString()}</Text>
+        </TouchableOpacity>
+
+        {showDate && (
+          <DateTimePicker value={date} mode="date" display="default" onChange={onDateChange} />
         )}
 
-        {/* ACCOUNT SELECTION */}
+        {showTime && (
+          <DateTimePicker value={date} mode="time" display="default" onChange={onTimeChange} />
+        )}
+
+        {/* ACCOUNT */}
         <Text style={styles.section}>Select Account</Text>
         <View style={styles.wrap}>
           {accounts.map((acc) => (
             <TouchableOpacity
               key={acc.id}
-              style={[
-                styles.box,
-                selectedAccount?.id === acc.id &&
-                  styles.activeBox,
-              ]}
+              style={[styles.box, selectedAccount?.id === acc.id && styles.activeBox]}
               onPress={() => setSelectedAccount(acc)}
             >
-              <Text style={{ color: "#fff" }}>
-                {acc.name} ({acc.type})
-              </Text>
-              <Text style={{ color: "#ccc" }}>
-                ₹{acc.balance}
-              </Text>
+              <Text style={{ color: "#fff" }}>{acc.name}</Text>
+              <Text style={{ color: "#ccc" }}>₹{acc.balance}</Text>
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* TRANSFER ACCOUNT */}
+        {/* TRANSFER */}
         {type === "transfer" && (
           <>
-            <Text style={styles.section}>
-              Transfer To
-            </Text>
+            <Text style={styles.section}>Transfer To</Text>
             <View style={styles.wrap}>
               {accounts
-                .filter(
-                  (a) => a.id !== selectedAccount?.id
-                )
+                .filter((a) => a.id !== selectedAccount?.id)
                 .map((acc) => (
                   <TouchableOpacity
                     key={acc.id}
-                    style={[
-                      styles.box,
-                      transferAccount?.id === acc.id &&
-                        styles.activeBox,
-                    ]}
-                    onPress={() =>
-                      setTransferAccount(acc)
-                    }
+                    style={[styles.box, transferAccount?.id === acc.id && styles.activeBox]}
+                    onPress={() => setTransferAccount(acc)}
                   >
-                    <Text style={{ color: "#fff" }}>
-                      {acc.name}
-                    </Text>
+                    <Text style={{ color: "#fff" }}>{acc.name}</Text>
                   </TouchableOpacity>
                 ))}
             </View>
@@ -277,39 +254,24 @@ export default function AddTransactionScreen({ navigation }) {
         {/* CATEGORY */}
         {type !== "transfer" && (
           <>
-            <Text style={styles.section}>
-              Select Category
-            </Text>
+            <Text style={styles.section}>Select Category</Text>
             <View style={styles.wrap}>
               {categories.map((cat) => (
                 <TouchableOpacity
                   key={cat.id}
-                  style={[
-                    styles.box,
-                    selectedCategory?.id ===
-                      cat.id && styles.activeBox,
-                  ]}
-                  onPress={() =>
-                    setSelectedCategory(cat)
-                  }
+                  style={[styles.box, selectedCategory?.id === cat.id && styles.activeBox]}
+                  onPress={() => setSelectedCategory(cat)}
                 >
-                  <Text style={{ color: "#fff" }}>
-                    {cat.name}
-                  </Text>
+                  <Text style={{ color: "#fff" }}>{cat.name}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </>
         )}
 
-        {/* SAVE BUTTON */}
-        <TouchableOpacity
-          style={styles.saveBtn}
-          onPress={handleSave}
-        >
-          <Text style={styles.saveText}>
-            {loading ? "Saving..." : "Add"}
-          </Text>
+        {/* SAVE */}
+        <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+          <Text style={styles.saveText}>{loading ? "Saving..." : "Add"}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -317,64 +279,15 @@ export default function AddTransactionScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  title: {
-    color: colors.gold,
-    fontSize: 24,
-    fontWeight: "700",
-    marginBottom: 20,
-  },
-  typeRow: {
-    flexDirection: "row",
-    gap: 10,
-    marginBottom: 20,
-  },
-  typeBtn: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: "#333",
-    alignItems: "center",
-  },
-  typeActive: {
-    backgroundColor: colors.gold,
-  },
-  input: {
-    backgroundColor: colors.card,
-    padding: 14,
-    borderRadius: 12,
-    marginBottom: 14,
-    color: "#fff",
-  },
-  section: {
-    color: "#fff",
-    marginTop: 14,
-    marginBottom: 8,
-    fontWeight: "600",
-  },
-  wrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
-  },
-  box: {
-    backgroundColor: colors.card,
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 10,
-  },
-  activeBox: {
-    borderWidth: 2,
-    borderColor: colors.gold,
-  },
-  saveBtn: {
-    backgroundColor: colors.gold,
-    padding: 16,
-    borderRadius: 14,
-    marginTop: 30,
-  },
-  saveText: {
-    textAlign: "center",
-    fontWeight: "700",
-    color: "#000",
-  },
+  title: { color: colors.gold, fontSize: 24, fontWeight: "700", marginBottom: 20 },
+  typeRow: { flexDirection: "row", gap: 10, marginBottom: 20 },
+  typeBtn: { flex: 1, padding: 12, borderRadius: 12, backgroundColor: "#333", alignItems: "center" },
+  typeActive: { backgroundColor: colors.gold },
+  input: { backgroundColor: colors.card, padding: 14, borderRadius: 12, marginBottom: 14, color: "#fff" },
+  section: { color: "#fff", marginTop: 14, marginBottom: 8, fontWeight: "600" },
+  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  box: { backgroundColor: colors.card, padding: 12, borderRadius: 12, marginBottom: 10 },
+  activeBox: { borderWidth: 2, borderColor: colors.gold },
+  saveBtn: { backgroundColor: colors.gold, padding: 16, borderRadius: 14, marginTop: 30 },
+  saveText: { textAlign: "center", fontWeight: "700", color: "#000" },
 });
