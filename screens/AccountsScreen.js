@@ -20,6 +20,10 @@ export default function AccountsScreen({ navigation }) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [transactions, setTransactions] = useState([]);
 
+  // ✅ NEW STATES
+  const [incomeTotal, setIncomeTotal] = useState(0);
+  const [expenseTotal, setExpenseTotal] = useState(0);
+
   const flatRef = useRef();
 
   /* ================= REFRESH ON SCREEN FOCUS ================= */
@@ -38,25 +42,15 @@ export default function AccountsScreen({ navigation }) {
 
     if (!data || data.length === 0) {
       setAccounts([
-        {
-          id: "bank-default",
-          name: "Bank",
-          balance: 0,
-          color: "#1f4e79",
-        },
-        {
-          id: "cash-default",
-          name: "Cash",
-          balance: 0,
-          color: "#295f2d",
-        },
+        { id: "bank-default", name: "Bank", balance: 0, color: "#1f4e79" },
+        { id: "cash-default", name: "Cash", balance: 0, color: "#295f2d" },
       ]);
     } else {
       setAccounts(data);
+      fetchTransactions(data[0].id);
     }
 
     setSelectedIndex(0);
-    if (data?.length) fetchTransactions(data[0].id);
   };
 
   /* ================= FETCH TRANSACTIONS ================= */
@@ -67,14 +61,25 @@ export default function AccountsScreen({ navigation }) {
       .eq("account_id", accountId)
       .order("date", { ascending: false });
 
-    setTransactions(data || []);
+    const tx = data || [];
+    setTransactions(tx);
+
+    // ✅ CALCULATE TOTALS
+    let income = 0;
+    let expense = 0;
+
+    tx.forEach((t) => {
+      if (t.type === "income") income += Number(t.amount);
+      if (t.type === "expense") expense += Number(t.amount);
+    });
+
+    setIncomeTotal(income);
+    setExpenseTotal(expense);
   };
 
   /* ================= HANDLE SLIDE ================= */
   const handleScrollEnd = (e) => {
-    const index = Math.round(
-      e.nativeEvent.contentOffset.x / width
-    );
+    const index = Math.round(e.nativeEvent.contentOffset.x / width);
     setSelectedIndex(index);
 
     const accountId = accounts[index]?.id;
@@ -83,32 +88,21 @@ export default function AccountsScreen({ navigation }) {
 
   /* ================= CARD ================= */
   const renderCard = ({ item }) => (
-    <View
-      style={[
-        styles.accountCard,
-        { backgroundColor: item.color || "#333" },
-      ]}
-    >
+    <View style={[styles.accountCard, { backgroundColor: item.color || "#333" }]}>
       <View style={styles.cardHeader}>
         <View>
           <Text style={styles.accountTitle}>{item.name}</Text>
           <Text style={styles.accountUser}>Yash</Text>
         </View>
         <Ionicons
-          name={
-            item.name === "Cash"
-              ? "cash-outline"
-              : "business-outline"
-          }
+          name={item.name === "Cash" ? "cash-outline" : "business-outline"}
           size={24}
           color="#fff"
         />
       </View>
 
       <Text style={styles.balanceLabel}>Total balance</Text>
-      <Text style={styles.balanceValue}>
-        ₹{item.balance?.toFixed(2) || "0.00"}
-      </Text>
+      <Text style={styles.balanceValue}>₹{item.balance?.toFixed(2) || "0.00"}</Text>
     </View>
   );
 
@@ -129,32 +123,22 @@ export default function AccountsScreen({ navigation }) {
       {/* ===== DOT INDICATOR ===== */}
       <View style={styles.dots}>
         {accounts.map((_, i) => (
-          <View
-            key={i}
-            style={[
-              styles.dot,
-              selectedIndex === i && styles.activeDot,
-            ]}
-          />
+          <View key={i} style={[styles.dot, selectedIndex === i && styles.activeDot]} />
         ))}
       </View>
 
-      {/* ===== SUMMARY ===== */}
+      {/* ===== SUMMARY (AUTO UPDATED) ===== */}
       <View style={styles.compareRow}>
         <View>
           <Text style={styles.compareLabel}>Income</Text>
-          <Text style={styles.income}>₹0.00 ↑0.00%</Text>
-          <Text style={styles.compareSub}>
-            Compared to last month
-          </Text>
+          <Text style={styles.income}>₹{incomeTotal.toFixed(2)}</Text>
+          <Text style={styles.compareSub}>Total income</Text>
         </View>
 
         <View>
           <Text style={styles.compareLabel}>Expense</Text>
-          <Text style={styles.expense}>₹0.00 ↑0.00%</Text>
-          <Text style={styles.compareSub}>
-            Compared to last month
-          </Text>
+          <Text style={styles.expense}>₹{expenseTotal.toFixed(2)}</Text>
+          <Text style={styles.compareSub}>Total expense</Text>
         </View>
       </View>
 
@@ -162,14 +146,8 @@ export default function AccountsScreen({ navigation }) {
       <ScrollView style={{ marginTop: 20 }}>
         {transactions.length === 0 ? (
           <View style={styles.empty}>
-            <Ionicons
-              name="wallet-outline"
-              size={48}
-              color="#aaa"
-            />
-            <Text style={styles.emptyTitle}>
-              No transactions found for Yash
-            </Text>
+            <Ionicons name="wallet-outline" size={48} color="#aaa" />
+            <Text style={styles.emptyTitle}>No transactions found for Yash</Text>
             <Text style={styles.emptySub}>
               Please add transactions to this account
             </Text>
@@ -177,42 +155,26 @@ export default function AccountsScreen({ navigation }) {
         ) : (
           transactions.map((t) => (
             <View key={t.id} style={styles.txRow}>
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                }}
-              >
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <View
                   style={[
                     styles.catIcon,
-                    {
-                      backgroundColor:
-                        t.categories?.color || "#444",
-                    },
+                    { backgroundColor: t.categories?.color || "#444" },
                   ]}
                 />
                 <View>
-                  <Text style={styles.txTitle}>
-                    {t.title}
-                  </Text>
-                  <Text style={styles.txSub}>
-                    {t.categories?.name}
-                  </Text>
+                  <Text style={styles.txTitle}>{t.title}</Text>
+                  <Text style={styles.txSub}>{t.categories?.name}</Text>
                 </View>
               </View>
 
               <Text
                 style={{
-                  color:
-                    t.type === "expense"
-                      ? "#ff8b8b"
-                      : "#6ddf9c",
+                  color: t.type === "expense" ? "#ff8b8b" : "#6ddf9c",
                   fontWeight: "700",
                 }}
               >
-                {t.type === "expense" ? "-" : "+"}₹
-                {t.amount}
+                {t.type === "expense" ? "-" : "+"}₹{t.amount}
               </Text>
             </View>
           ))
@@ -220,10 +182,7 @@ export default function AccountsScreen({ navigation }) {
       </ScrollView>
 
       {/* ===== ADD ACCOUNT BUTTON ===== */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => navigation.navigate("AddAccount")}
-      >
+      <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate("AddAccount")}>
         <Ionicons name="add" size={26} color="#000" />
       </TouchableOpacity>
     </SafeAreaView>
@@ -257,12 +216,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
 
-  dots: {
-    flexDirection: "row",
-    justifyContent: "center",
-    marginTop: 10,
-  },
-
+  dots: { flexDirection: "row", justifyContent: "center", marginTop: 10 },
   dot: {
     width: 8,
     height: 8,
@@ -270,7 +224,6 @@ const styles = StyleSheet.create({
     backgroundColor: "#555",
     marginHorizontal: 4,
   },
-
   activeDot: { backgroundColor: "#f5b38a", width: 16 },
 
   compareRow: {
@@ -285,11 +238,7 @@ const styles = StyleSheet.create({
   expense: { color: "#ff8b8b", fontWeight: "700", marginTop: 4 },
   compareSub: { color: "#aaa", fontSize: 11 },
 
-  empty: {
-    alignItems: "center",
-    marginTop: 60,
-  },
-
+  empty: { alignItems: "center", marginTop: 60 },
   emptyTitle: { color: "#fff", marginTop: 12, fontWeight: "700" },
   emptySub: { color: "#aaa", marginTop: 6, fontSize: 12 },
 
@@ -301,13 +250,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#333",
   },
 
-  catIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    marginRight: 10,
-  },
-
+  catIcon: { width: 36, height: 36, borderRadius: 18, marginRight: 10 },
   txTitle: { color: "#fff", fontWeight: "600" },
   txSub: { color: "#aaa", fontSize: 12 },
 

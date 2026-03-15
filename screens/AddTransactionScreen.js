@@ -16,6 +16,7 @@ import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 
 export default function AddTransactionScreen({ navigation }) {
+
   const [type, setType] = useState("expense");
 
   const [title, setTitle] = useState("");
@@ -81,6 +82,7 @@ export default function AddTransactionScreen({ navigation }) {
   /* ================= SAVE ================= */
 
   const handleSave = async () => {
+
     if (!amount || !selectedAccount) {
       Alert.alert("Error", "Select account & enter amount");
       return;
@@ -104,15 +106,24 @@ export default function AddTransactionScreen({ navigation }) {
 
     const parsedAmount = parseFloat(amount);
 
+    /* ================= INSERT TRANSACTION ================= */
+
     const { error } = await supabase.from("transactions").insert([
       {
         user_id: user.id,
+
         account_id: selectedAccount.id,
+
+        // ⭐ NEW FIELD
+        to_account_id: type === "transfer" ? transferAccount.id : null,
+
         category_id: type === "transfer" ? null : selectedCategory.id,
+
         type,
         title,
         amount: parsedAmount,
         description,
+
         date: date.toISOString().split("T")[0],
         time: date.toTimeString().split(" ")[0],
       },
@@ -124,47 +135,84 @@ export default function AddTransactionScreen({ navigation }) {
       return;
     }
 
-    /* ===== BALANCE UPDATE ===== */
+    /* ================= SAFE BALANCE UPDATE ================= */
+
+    const { data: sourceAccount } = await supabase
+      .from("accounts")
+      .select("balance")
+      .eq("id", selectedAccount.id)
+      .single();
+
+    const currentBalance = Number(sourceAccount.balance);
 
     if (type === "expense") {
+
       await supabase
         .from("accounts")
-        .update({ balance: selectedAccount.balance - parsedAmount })
+        .update({
+          balance: currentBalance - parsedAmount
+        })
         .eq("id", selectedAccount.id);
+
     }
 
     if (type === "income") {
+
       await supabase
         .from("accounts")
-        .update({ balance: selectedAccount.balance + parsedAmount })
+        .update({
+          balance: currentBalance + parsedAmount
+        })
         .eq("id", selectedAccount.id);
+
     }
 
     if (type === "transfer") {
+
+      const { data: destinationAccount } = await supabase
+        .from("accounts")
+        .select("balance")
+        .eq("id", transferAccount.id)
+        .single();
+
       await supabase
         .from("accounts")
-        .update({ balance: selectedAccount.balance - parsedAmount })
+        .update({
+          balance: currentBalance - parsedAmount
+        })
         .eq("id", selectedAccount.id);
 
       await supabase
         .from("accounts")
-        .update({ balance: transferAccount.balance + parsedAmount })
+        .update({
+          balance: Number(destinationAccount.balance) + parsedAmount
+        })
         .eq("id", transferAccount.id);
+
     }
 
     setLoading(false);
+
     Alert.alert("Success 🎉", "Transaction added");
-    navigation.goBack();
+
+    navigation.navigate("Main", {
+      screen: "Home",
+      params: { refreshAt: Date.now() },
+    });
   };
 
   /* ================= UI ================= */
 
   return (
+
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+
       <ScrollView contentContainerStyle={{ padding: 20 }}>
+
         <Text style={styles.title}>Add Transaction</Text>
 
         {/* TYPE SWITCH */}
+
         <View style={styles.typeRow}>
           {["expense", "income", "transfer"].map((t) => (
             <TouchableOpacity
@@ -180,6 +228,7 @@ export default function AddTransactionScreen({ navigation }) {
         </View>
 
         {/* TITLE */}
+
         <TextInput
           style={styles.input}
           placeholder="Title"
@@ -189,6 +238,7 @@ export default function AddTransactionScreen({ navigation }) {
         />
 
         {/* AMOUNT */}
+
         <TextInput
           style={styles.input}
           placeholder="Amount"
@@ -199,30 +249,47 @@ export default function AddTransactionScreen({ navigation }) {
         />
 
         {/* DATE */}
+
         <TouchableOpacity style={styles.input} onPress={() => setShowDate(true)}>
           <Text style={{ color: "#fff" }}>{date.toLocaleDateString()}</Text>
         </TouchableOpacity>
 
         {/* TIME */}
+
         <TouchableOpacity style={styles.input} onPress={() => setShowTime(true)}>
           <Text style={{ color: "#fff" }}>{date.toLocaleTimeString()}</Text>
         </TouchableOpacity>
 
         {showDate && (
-          <DateTimePicker value={date} mode="date" display="default" onChange={onDateChange} />
+          <DateTimePicker
+            value={date}
+            mode="date"
+            display="default"
+            onChange={onDateChange}
+          />
         )}
 
         {showTime && (
-          <DateTimePicker value={date} mode="time" display="default" onChange={onTimeChange} />
+          <DateTimePicker
+            value={date}
+            mode="time"
+            display="default"
+            onChange={onTimeChange}
+          />
         )}
 
         {/* ACCOUNT */}
+
         <Text style={styles.section}>Select Account</Text>
+
         <View style={styles.wrap}>
           {accounts.map((acc) => (
             <TouchableOpacity
               key={acc.id}
-              style={[styles.box, selectedAccount?.id === acc.id && styles.activeBox]}
+              style={[
+                styles.box,
+                selectedAccount?.id === acc.id && styles.activeBox
+              ]}
               onPress={() => setSelectedAccount(acc)}
             >
               <Text style={{ color: "#fff" }}>{acc.name}</Text>
@@ -232,16 +299,21 @@ export default function AddTransactionScreen({ navigation }) {
         </View>
 
         {/* TRANSFER */}
+
         {type === "transfer" && (
           <>
             <Text style={styles.section}>Transfer To</Text>
+
             <View style={styles.wrap}>
               {accounts
                 .filter((a) => a.id !== selectedAccount?.id)
                 .map((acc) => (
                   <TouchableOpacity
                     key={acc.id}
-                    style={[styles.box, transferAccount?.id === acc.id && styles.activeBox]}
+                    style={[
+                      styles.box,
+                      transferAccount?.id === acc.id && styles.activeBox
+                    ]}
                     onPress={() => setTransferAccount(acc)}
                   >
                     <Text style={{ color: "#fff" }}>{acc.name}</Text>
@@ -252,14 +324,19 @@ export default function AddTransactionScreen({ navigation }) {
         )}
 
         {/* CATEGORY */}
+
         {type !== "transfer" && (
           <>
             <Text style={styles.section}>Select Category</Text>
+
             <View style={styles.wrap}>
               {categories.map((cat) => (
                 <TouchableOpacity
                   key={cat.id}
-                  style={[styles.box, selectedCategory?.id === cat.id && styles.activeBox]}
+                  style={[
+                    styles.box,
+                    selectedCategory?.id === cat.id && styles.activeBox
+                  ]}
                   onPress={() => setSelectedCategory(cat)}
                 >
                   <Text style={{ color: "#fff" }}>{cat.name}</Text>
@@ -270,10 +347,15 @@ export default function AddTransactionScreen({ navigation }) {
         )}
 
         {/* SAVE */}
+
         <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
-          <Text style={styles.saveText}>{loading ? "Saving..." : "Add"}</Text>
+          <Text style={styles.saveText}>
+            {loading ? "Saving..." : "Add"}
+          </Text>
         </TouchableOpacity>
+
       </ScrollView>
+
     </SafeAreaView>
   );
 }

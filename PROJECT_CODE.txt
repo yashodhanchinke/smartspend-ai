@@ -1,0 +1,3341 @@
+===== App.js =====
+
+import CategoryProvider from "./context/CategoryContext"; // ✅ FIXED
+import AppNavigator from "./navigation/AppNavigator";
+
+export default function App() {
+  return (
+    <CategoryProvider>
+      <AppNavigator />
+    </CategoryProvider>
+  );
+}
+
+
+===== navigation/AppNavigator.js =====
+
+// navigation/AppNavigator.js
+
+import { NavigationContainer } from "@react-navigation/native";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
+import { seedCategoriesForUser } from "../util/seedCategories";
+
+// Screens
+import LoginScreen from "../screens/LoginScreen";
+import RegisterScreen from "../screens/RegisterScreen";
+import BottomTabs from "./BottomTabs";
+
+import AddAccountScreen from "../screens/AddAccountScreen";
+import AddCategoryScreen from "../screens/AddCategoryScreen";
+import AddTransactionScreen from "../screens/AddTransactionScreen";
+import AnalyticsScreen from "../screens/AnalyticsScreen";
+import BudgetsScreen from "../screens/BudgetsScreen";
+import CategoriesScreen from "../screens/CategoriesScreen";
+import CategoryDetailsScreen from "../screens/CategoryDetailsScreen";
+import GoalsScreen from "../screens/GoalsScreen";
+import LabelsScreen from "../screens/LabelsScreen";
+import LoansScreen from "../screens/LoansScreen";
+import RecurringScreen from "../screens/RecurringScreen";
+import TransactionsScreen from "../screens/TransactionsScreen";
+
+
+const Stack = createNativeStackNavigator();
+
+export default function AppNavigator() {
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+  setSession(session);
+
+  if (session?.user) {
+    await seedCategoriesForUser(session.user.id);
+  }
+});
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loading) return null;
+
+  return (
+    <NavigationContainer>
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
+        {!session ? (
+          <>
+            <Stack.Screen name="Login" component={LoginScreen} />
+            <Stack.Screen name="Register" component={RegisterScreen} />
+          </>
+        ) : (
+          <>
+            <Stack.Screen name="Main" component={BottomTabs} />
+
+            <Stack.Screen name="AddTransaction" component={AddTransactionScreen} />
+            <Stack.Screen name="Categories" component={CategoriesScreen} />
+            <Stack.Screen name="CategoryDetails" component={CategoryDetailsScreen} />
+
+            <Stack.Screen name="Budgets" component={BudgetsScreen} />
+            <Stack.Screen name="Goals" component={GoalsScreen} />
+            <Stack.Screen name="Labels" component={LabelsScreen} />
+            <Stack.Screen name="Loans" component={LoansScreen} />
+            <Stack.Screen name="Recurring" component={RecurringScreen} />
+            <Stack.Screen name="Analytics" component={AnalyticsScreen} />
+            <Stack.Screen name="Weekly Summary" component={TransactionsScreen} />
+            <Stack.Screen name="AddCategory" component={AddCategoryScreen} />
+            <Stack.Screen name="AddAccount" component={AddAccountScreen} />
+
+          </>
+        )}
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+
+
+===== navigation/BottomTabs.js =====
+
+import { Ionicons } from "@expo/vector-icons";
+import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { StyleSheet, Text, View } from "react-native";
+
+import AccountsScreen from "../screens/AccountsScreen";
+import HomeScreen from "../screens/HomeScreen";
+import ProfileScreen from "../screens/ProfileScreen";
+import ReportsScreen from "../screens/ReportsScreen";
+
+const Tab = createBottomTabNavigator();
+
+function TabIcon({ icon, label, focused }) {
+  return (
+    <View style={styles.tabItem}>
+      <Ionicons
+        name={icon}
+        size={22}
+        color={focused ? "#ffcc99" : "#b49a8a"}
+      />
+      <Text
+        style={[
+          styles.label,
+          { color: focused ? "#ffcc99" : "#b49a8a" },
+        ]}
+        numberOfLines={1} // 🔥 Prevent text from breaking into 2 lines
+      >
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+export default function BottomTabs() {
+  return (
+    <Tab.Navigator
+      screenOptions={{
+        headerShown: false,
+        tabBarShowLabel: false,
+        tabBarStyle: styles.tabBar,
+      }}
+    >
+      <Tab.Screen
+        name="Home"
+        component={HomeScreen}
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon icon="home" label="Home" focused={focused} />
+          ),
+        }}
+      />
+
+      <Tab.Screen
+        name="Accounts"
+        component={AccountsScreen}
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon icon="wallet" label="Accounts" focused={focused} />
+          ),
+        }}
+      />
+
+      <Tab.Screen
+        name="Reports"
+        component={ReportsScreen}
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon icon="pie-chart-outline" label="Reports" focused={focused} />
+          ),
+        }}
+      />
+
+      <Tab.Screen
+        name="Profile"
+        component={ProfileScreen}
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon icon="person" label="Profile" focused={focused} />
+          ),
+        }}
+      />
+    </Tab.Navigator>
+  );
+}
+
+const styles = StyleSheet.create({
+  tabBar: {
+    backgroundColor: "#2c1e1a",
+    height: 72,
+    borderTopColor: "#3a2722",
+    paddingBottom: 6,
+    paddingTop: 6,
+  },
+
+  tabItem: {
+    alignItems: "center",
+    justifyContent: "center",
+    width: 80, // 🔥 Prevent label from wrapping
+  },
+
+  label: {
+    fontSize: 12,
+    marginTop: 2,
+    fontWeight: "600",
+  },
+});
+
+
+===== context/CategoryContext.js =====
+
+import { createContext, useContext, useEffect, useState } from "react";
+import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "../data/categories";
+
+const CategoryContext = createContext();
+export const useCategories = () => useContext(CategoryContext);
+
+export default function CategoryProvider({ children }) {
+  const [expenseCategories, setExpense] = useState(EXPENSE_CATEGORIES);
+  const [incomeCategories, setIncome] = useState(INCOME_CATEGORIES);
+
+  const [transactions, setTransactions] = useState([]); // backend data later
+
+  // Auto-update totals whenever transactions change
+  useEffect(() => {
+    updateCategoryTotals();
+  }, [transactions]);
+
+  const updateCategoryTotals = () => {
+    const expenseCopy = EXPENSE_CATEGORIES.map(cat => {
+      const total = transactions
+        .filter(t => t.type === "expense" && t.category === cat.id)
+        .reduce((sum, t) => sum + t.amount, 0);
+      return { ...cat, total };
+    });
+
+    const incomeCopy = INCOME_CATEGORIES.map(cat => {
+      const total = transactions
+        .filter(t => t.type === "income" && t.category === cat.id)
+        .reduce((sum, t) => sum + t.amount, 0);
+      return { ...cat, total };
+    });
+
+    setExpense(expenseCopy);
+    setIncome(incomeCopy);
+  };
+
+  return (
+    <CategoryContext.Provider
+      value={{
+        expenseCategories,
+        incomeCategories,
+
+        transactions,
+        setTransactions,
+      }}
+    >
+      {children}
+    </CategoryContext.Provider>
+  );
+}
+
+
+===== lib/supabase.js =====
+
+import { createClient } from "@supabase/supabase-js";
+
+
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL
+const SUPABASE_ANON_KEY =process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY
+
+export const supabase = createClient(
+  SUPABASE_URL,
+  SUPABASE_ANON_KEY
+);
+
+
+===== data/categories.js =====
+
+export const EXPENSE_CATEGORIES = [
+  { name: "Bills", type: "expense", icon: "file-document", color: "#61A5FF" },
+  { name: "Rent", type: "expense", icon: "home", color: "#9B5DE5" },
+  { name: "Travel", type: "expense", icon: "airplane", color: "#4CC9F0" },
+  { name: "Food", type: "expense", icon: "food", color: "#FF6B6B" },
+  { name: "Transport", type: "expense", icon: "truck-delivery", color: "#4CAF50" },
+  { name: "Shopping", type: "expense", icon: "shopping", color: "#4BA3C7" },
+  { name: "Entertainment", type: "expense", icon: "music", color: "#A96EFF" },
+  { name: "Health", type: "expense", icon: "heart", color: "#3EC1A3" },
+  { name: "Education", type: "expense", icon: "school", color: "#F4A261" },
+  { name: "Utilities", type: "expense", icon: "lightning-bolt", color: "#FFB703" },
+  { name: "Housing", type: "expense", icon: "home-city", color: "#D55D92" },
+  { name: "Groceries", type: "expense", icon: "cart", color: "#6A4C93" },
+  { name: "Others", type: "expense", icon: "dots-horizontal", color: "#8D8D8D" },
+];
+
+export const INCOME_CATEGORIES = [
+  { name: "Business", type: "income", icon: "briefcase", color: "#4CAF50" },
+  { name: "Gifts", type: "income", icon: "gift", color: "#9B5DE5" },
+  { name: "Investments", type: "income", icon: "chart-line", color: "#4CC9F0" },
+  { name: "Savings", type: "income", icon: "piggy-bank", color: "#F15BB5" },
+  { name: "Salary", type: "income", icon: "bank", color: "#00A896" },
+];
+
+
+===== util/seedCategories.js =====
+
+// util/seedCategories.js
+
+import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from "../data/categories";
+import { supabase } from "../lib/supabase";
+
+export const seedCategoriesForUser = async (userId) => {
+  if (!userId) return;
+
+  // Check if categories already exist
+  const { data, error } = await supabase
+    .from("categories")
+    .select("id")
+    .eq("user_id", userId);
+
+  if (error) {
+    console.log("Seed check error:", error.message);
+    return;
+  }
+
+  // If user already has categories, stop
+  if (data && data.length > 0) return;
+
+  // Prepare default categories
+  const defaults = [...EXPENSE_CATEGORIES, ...INCOME_CATEGORIES].map(
+    (cat) => ({
+      user_id: userId,
+      name: cat.name,
+      type: cat.type,
+      icon: cat.icon,
+      color: cat.color,
+    })
+  );
+
+  const { error: insertError } = await supabase
+    .from("categories")
+    .insert(defaults);
+
+  if (insertError) {
+    console.log("Seed insert error:", insertError.message);
+  }
+};
+
+
+===== theme/colors.js =====
+
+export default {
+  background: '#2c1e1a',     // deep brown
+  card: '#3a2722',           // medium brown
+  text: '#f5e9e2',           // cream text
+  muted: '#c2a79b',          // soft beige
+  gold: '#ffcc99',           // peach gold (matches screenshot)
+  border: '#4a332d',         // brown border
+};
+
+
+===== screens/AccountsScreen.js =====
+
+import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useRef, useState } from "react";
+import {
+  Dimensions,
+  FlatList,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+
+const { width } = Dimensions.get("window");
+
+export default function AccountsScreen({ navigation }) {
+  const [accounts, setAccounts] = useState([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [transactions, setTransactions] = useState([]);
+
+  // ✅ NEW STATES
+  const [incomeTotal, setIncomeTotal] = useState(0);
+  const [expenseTotal, setExpenseTotal] = useState(0);
+
+  const flatRef = useRef();
+
+  /* ================= REFRESH ON SCREEN FOCUS ================= */
+  useFocusEffect(
+    useCallback(() => {
+      fetchAccounts();
+    }, [])
+  );
+
+  /* ================= FETCH ACCOUNTS ================= */
+  const fetchAccounts = async () => {
+    const { data } = await supabase
+      .from("accounts")
+      .select("*")
+      .order("created_at");
+
+    if (!data || data.length === 0) {
+      setAccounts([
+        { id: "bank-default", name: "Bank", balance: 0, color: "#1f4e79" },
+        { id: "cash-default", name: "Cash", balance: 0, color: "#295f2d" },
+      ]);
+    } else {
+      setAccounts(data);
+      fetchTransactions(data[0].id);
+    }
+
+    setSelectedIndex(0);
+  };
+
+  /* ================= FETCH TRANSACTIONS ================= */
+  const fetchTransactions = async (accountId) => {
+    const { data } = await supabase
+      .from("transactions")
+      .select("*, categories(name,color)")
+      .eq("account_id", accountId)
+      .order("date", { ascending: false });
+
+    const tx = data || [];
+    setTransactions(tx);
+
+    // ✅ CALCULATE TOTALS
+    let income = 0;
+    let expense = 0;
+
+    tx.forEach((t) => {
+      if (t.type === "income") income += Number(t.amount);
+      if (t.type === "expense") expense += Number(t.amount);
+    });
+
+    setIncomeTotal(income);
+    setExpenseTotal(expense);
+  };
+
+  /* ================= HANDLE SLIDE ================= */
+  const handleScrollEnd = (e) => {
+    const index = Math.round(e.nativeEvent.contentOffset.x / width);
+    setSelectedIndex(index);
+
+    const accountId = accounts[index]?.id;
+    if (accountId) fetchTransactions(accountId);
+  };
+
+  /* ================= CARD ================= */
+  const renderCard = ({ item }) => (
+    <View style={[styles.accountCard, { backgroundColor: item.color || "#333" }]}>
+      <View style={styles.cardHeader}>
+        <View>
+          <Text style={styles.accountTitle}>{item.name}</Text>
+          <Text style={styles.accountUser}>Yash</Text>
+        </View>
+        <Ionicons
+          name={item.name === "Cash" ? "cash-outline" : "business-outline"}
+          size={24}
+          color="#fff"
+        />
+      </View>
+
+      <Text style={styles.balanceLabel}>Total balance</Text>
+      <Text style={styles.balanceValue}>₹{item.balance?.toFixed(2) || "0.00"}</Text>
+    </View>
+  );
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      {/* ===== ACCOUNT SLIDER ===== */}
+      <FlatList
+        ref={flatRef}
+        data={accounts}
+        renderItem={renderCard}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        keyExtractor={(item) => item.id}
+        onMomentumScrollEnd={handleScrollEnd}
+      />
+
+      {/* ===== DOT INDICATOR ===== */}
+      <View style={styles.dots}>
+        {accounts.map((_, i) => (
+          <View key={i} style={[styles.dot, selectedIndex === i && styles.activeDot]} />
+        ))}
+      </View>
+
+      {/* ===== SUMMARY (AUTO UPDATED) ===== */}
+      <View style={styles.compareRow}>
+        <View>
+          <Text style={styles.compareLabel}>Income</Text>
+          <Text style={styles.income}>₹{incomeTotal.toFixed(2)}</Text>
+          <Text style={styles.compareSub}>Total income</Text>
+        </View>
+
+        <View>
+          <Text style={styles.compareLabel}>Expense</Text>
+          <Text style={styles.expense}>₹{expenseTotal.toFixed(2)}</Text>
+          <Text style={styles.compareSub}>Total expense</Text>
+        </View>
+      </View>
+
+      {/* ===== TRANSACTIONS ===== */}
+      <ScrollView style={{ marginTop: 20 }}>
+        {transactions.length === 0 ? (
+          <View style={styles.empty}>
+            <Ionicons name="wallet-outline" size={48} color="#aaa" />
+            <Text style={styles.emptyTitle}>No transactions found for Yash</Text>
+            <Text style={styles.emptySub}>
+              Please add transactions to this account
+            </Text>
+          </View>
+        ) : (
+          transactions.map((t) => (
+            <View key={t.id} style={styles.txRow}>
+              <View style={{ flexDirection: "row", alignItems: "center" }}>
+                <View
+                  style={[
+                    styles.catIcon,
+                    { backgroundColor: t.categories?.color || "#444" },
+                  ]}
+                />
+                <View>
+                  <Text style={styles.txTitle}>{t.title}</Text>
+                  <Text style={styles.txSub}>{t.categories?.name}</Text>
+                </View>
+              </View>
+
+              <Text
+                style={{
+                  color: t.type === "expense" ? "#ff8b8b" : "#6ddf9c",
+                  fontWeight: "700",
+                }}
+              >
+                {t.type === "expense" ? "-" : "+"}₹{t.amount}
+              </Text>
+            </View>
+          ))
+        )}
+      </ScrollView>
+
+      {/* ===== ADD ACCOUNT BUTTON ===== */}
+      <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate("AddAccount")}>
+        <Ionicons name="add" size={26} color="#000" />
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: "#1a0f0a" },
+
+  accountCard: {
+    width: width - 40,
+    marginHorizontal: 20,
+    borderRadius: 24,
+    padding: 20,
+  },
+
+  cardHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 20,
+  },
+
+  accountTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  accountUser: { color: "#ddd", fontSize: 13 },
+
+  balanceLabel: { color: "#ddd", fontSize: 13 },
+  balanceValue: {
+    color: "#fff",
+    fontSize: 30,
+    fontWeight: "800",
+    marginTop: 6,
+  },
+
+  dots: { flexDirection: "row", justifyContent: "center", marginTop: 10 },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 5,
+    backgroundColor: "#555",
+    marginHorizontal: 4,
+  },
+  activeDot: { backgroundColor: "#f5b38a", width: 16 },
+
+  compareRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
+    marginTop: 10,
+  },
+
+  compareLabel: { color: "#ccc", fontSize: 13 },
+  income: { color: "#6ddf9c", fontWeight: "700", marginTop: 4 },
+  expense: { color: "#ff8b8b", fontWeight: "700", marginTop: 4 },
+  compareSub: { color: "#aaa", fontSize: 11 },
+
+  empty: { alignItems: "center", marginTop: 60 },
+  emptyTitle: { color: "#fff", marginTop: 12, fontWeight: "700" },
+  emptySub: { color: "#aaa", marginTop: 6, fontSize: 12 },
+
+  txRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    padding: 16,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "#333",
+  },
+
+  catIcon: { width: 36, height: 36, borderRadius: 18, marginRight: 10 },
+  txTitle: { color: "#fff", fontWeight: "600" },
+  txSub: { color: "#aaa", fontSize: 12 },
+
+  fab: {
+    position: "absolute",
+    right: 20,
+    bottom: 30,
+    backgroundColor: "#f5b38a",
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});
+
+
+===== screens/AddAccountScreen.js =====
+
+import { useState } from "react";
+import {
+    Alert,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+
+export default function AddAccountScreen({ navigation }) {
+  const [name, setName] = useState("");
+  const [balance, setBalance] = useState("");
+  const [type, setType] = useState("bank");
+  const [color, setColor] = useState("#1f4e79");
+
+  const saveAccount = async () => {
+    if (!name) {
+      Alert.alert("Error", "Enter account name");
+      return;
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    const { error } = await supabase.from("accounts").insert([
+      {
+        user_id: user.id,
+        name,
+        balance: parseFloat(balance || 0),
+        type,
+        color,
+      },
+    ]);
+
+    if (error) {
+      Alert.alert("Error", error.message);
+      return;
+    }
+
+    Alert.alert("Success 🎉", "Account created");
+    navigation.goBack();
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={{ padding: 20 }}>
+        <Text style={styles.title}>Add Account</Text>
+
+        <TextInput
+          style={styles.input}
+          placeholder="Account name"
+          placeholderTextColor="#aaa"
+          value={name}
+          onChangeText={setName}
+        />
+
+        <TextInput
+          style={styles.input}
+          placeholder="Initial balance"
+          placeholderTextColor="#aaa"
+          keyboardType="numeric"
+          value={balance}
+          onChangeText={setBalance}
+        />
+
+        <View style={styles.row}>
+          {["bank", "cash"].map((t) => (
+            <TouchableOpacity
+              key={t}
+              style={[styles.typeBtn, type === t && styles.active]}
+              onPress={() => setType(t)}
+            >
+              <Text style={{ color: type === t ? "#000" : "#fff" }}>
+                {t.toUpperCase()}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <TouchableOpacity style={styles.saveBtn} onPress={saveAccount}>
+          <Text style={{ textAlign: "center", fontWeight: "700" }}>
+            Add
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: "#1a0f0a" },
+  title: { color: "#f5b38a", fontSize: 24, fontWeight: "700", marginBottom: 20 },
+  input: {
+    backgroundColor: "#2a1a14",
+    padding: 14,
+    borderRadius: 12,
+    color: "#fff",
+    marginBottom: 14,
+  },
+  row: { flexDirection: "row", gap: 10 },
+  typeBtn: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "#333",
+    alignItems: "center",
+  },
+  active: { backgroundColor: "#f5b38a" },
+  saveBtn: {
+    backgroundColor: "#f5b38a",
+    padding: 16,
+    borderRadius: 14,
+    marginTop: 20,
+  },
+});
+
+
+===== screens/AddCategoryScreen.js =====
+
+// screens/AddCategoryScreen.js
+
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useState } from "react";
+import {
+    Alert,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+
+const COLORS = [
+  "#FF4444", "#E91E63", "#9C27B0", "#673AB7", "#3F51B5", "#2196F3", "#03A9F4",
+  "#00BCD4", "#009688", "#4CAF50", "#8BC34A", "#CDDC39", "#FFEB3B", "#FFC107",
+  "#FF9800", "#FF5722", "#795548", "#607D8B", "#9E9E9E",
+  "#F5E6E0", "#E6B8B7", "#D98880", "#E57373", "#EF5350",
+  "#F44336", "#E53935", "#D32F2F"
+];
+
+export default function AddCategoryScreen({ navigation }) {
+  const [type, setType] = useState("expense");
+  const [name, setName] = useState("");
+  const [selectedColor, setSelectedColor] = useState("#FF4444");
+
+  const handleSave = async () => {
+    if (!name.trim()) {
+      Alert.alert("Please enter category name");
+      return;
+    }
+
+    const { data: userData } = await supabase.auth.getUser();
+    const user = userData?.user;
+    if (!user) return;
+
+    const { error } = await supabase.from("categories").insert([
+      {
+        user_id: user.id,
+        name,
+        type,
+        icon: "tag",
+        color: selectedColor,
+      },
+    ]);
+
+    if (error) {
+      Alert.alert(error.message);
+    } else {
+      navigation.goBack();
+    }
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.container}>
+
+        {/* HEADER */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <MaterialCommunityIcons
+              name="arrow-left"
+              size={26}
+              color="#fff"
+            />
+          </TouchableOpacity>
+
+          <Text style={styles.title}>Add Category</Text>
+
+          <View style={{ width: 26 }} />
+        </View>
+
+        {/* TYPE TOGGLE */}
+        <View style={styles.typeRow}>
+          {["expense", "income"].map((item) => (
+            <TouchableOpacity
+              key={item}
+              style={[
+                styles.typeBtn,
+                type === item && styles.typeActive,
+              ]}
+              onPress={() => setType(item)}
+            >
+              <Text
+                style={[
+                  styles.typeText,
+                  type === item && styles.typeTextActive,
+                ]}
+              >
+                {item === "expense" ? "Expense" : "Income"}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* CATEGORY NAME INPUT */}
+        <View style={styles.inputCard}>
+          <TextInput
+            placeholder="Enter category name"
+            placeholderTextColor="#aaa"
+            value={name}
+            onChangeText={setName}
+            style={styles.input}
+          />
+        </View>
+
+        {/* COLORS */}
+        <Text style={styles.sectionTitle}>Colors</Text>
+
+        <View style={styles.colorGrid}>
+          {COLORS.map((color) => (
+            <TouchableOpacity
+              key={color}
+              style={[
+                styles.colorCircle,
+                { backgroundColor: color },
+                selectedColor === color && styles.selectedColor,
+              ]}
+              onPress={() => setSelectedColor(color)}
+            >
+              {selectedColor === color && (
+                <MaterialCommunityIcons
+                  name="check"
+                  size={18}
+                  color="#fff"
+                />
+              )}
+            </TouchableOpacity>
+          ))}
+        </View>
+
+      </ScrollView>
+
+      {/* SAVE BUTTON */}
+      <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+        <MaterialCommunityIcons name="content-save" size={22} color="#000" />
+        <Text style={styles.saveText}>Add</Text>
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: {
+    flex: 1,
+    backgroundColor: "#2B1A14",
+  },
+
+  container: {
+    padding: 20,
+    paddingBottom: 120,
+  },
+
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+
+  title: {
+    color: "#EEDDD2",
+    fontSize: 22,
+    fontWeight: "700",
+  },
+
+  typeRow: {
+    flexDirection: "row",
+    backgroundColor: "#3A241C",
+    borderRadius: 14,
+    marginBottom: 20,
+  },
+
+  typeBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: "center",
+    borderRadius: 14,
+  },
+
+  typeActive: {
+    backgroundColor: "#F8C7A0",
+  },
+
+  typeText: {
+    color: "#C8B8AF",
+    fontWeight: "600",
+  },
+
+  typeTextActive: {
+    color: "#000",
+    fontWeight: "700",
+  },
+
+  inputCard: {
+    backgroundColor: "#3A241C",
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 20,
+  },
+
+  input: {
+    color: "#fff",
+  },
+
+  sectionTitle: {
+    color: "#EEDDD2",
+    fontSize: 16,
+    marginBottom: 10,
+  },
+
+  colorGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+  },
+
+  colorCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    margin: 6,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  selectedColor: {
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+
+  saveBtn: {
+    position: "absolute",
+    bottom: 30,
+    left: 20,
+    right: 20,
+    backgroundColor: "#F8C7A0",
+    padding: 16,
+    borderRadius: 18,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+
+  saveText: {
+    marginLeft: 8,
+    fontWeight: "700",
+    color: "#000",
+  },
+});
+
+
+===== screens/AddTransactionScreen.js =====
+
+// screens/AddTransactionScreen.js
+
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { useEffect, useState } from "react";
+import {
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+import colors from "../theme/colors";
+
+export default function AddTransactionScreen({ navigation }) {
+  const [type, setType] = useState("expense");
+
+  const [title, setTitle] = useState("");
+  const [amount, setAmount] = useState("");
+  const [description, setDescription] = useState("");
+
+  const [accounts, setAccounts] = useState([]);
+  const [categories, setCategories] = useState([]);
+
+  const [selectedAccount, setSelectedAccount] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [transferAccount, setTransferAccount] = useState(null);
+
+  const [date, setDate] = useState(new Date());
+  const [showDate, setShowDate] = useState(false);
+  const [showTime, setShowTime] = useState(false);
+
+  const [loading, setLoading] = useState(false);
+
+  /* ================= LOAD DATA ================= */
+
+  useEffect(() => {
+    fetchAccounts();
+  }, []);
+
+  useEffect(() => {
+    if (type !== "transfer") fetchCategories();
+  }, [type]);
+
+  const fetchAccounts = async () => {
+    const { data } = await supabase.from("accounts").select("*");
+    setAccounts(data || []);
+  };
+
+  const fetchCategories = async () => {
+    const { data } = await supabase
+      .from("categories")
+      .select("*")
+      .eq("type", type);
+
+    setCategories(data || []);
+  };
+
+  /* ================= DATE HANDLERS ================= */
+
+  const onDateChange = (event, selectedDate) => {
+    setShowDate(false);
+    if (selectedDate) {
+      setDate(selectedDate);
+    }
+  };
+
+  const onTimeChange = (event, selectedTime) => {
+    setShowTime(false);
+    if (selectedTime) {
+      const newDate = new Date(date);
+      newDate.setHours(selectedTime.getHours());
+      newDate.setMinutes(selectedTime.getMinutes());
+      setDate(newDate);
+    }
+  };
+
+  /* ================= SAVE ================= */
+
+  const handleSave = async () => {
+    if (!amount || !selectedAccount) {
+      Alert.alert("Error", "Select account & enter amount");
+      return;
+    }
+
+    if (type !== "transfer" && !selectedCategory) {
+      Alert.alert("Error", "Select category");
+      return;
+    }
+
+    if (type === "transfer" && !transferAccount) {
+      Alert.alert("Error", "Select transfer account");
+      return;
+    }
+
+    setLoading(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    const parsedAmount = parseFloat(amount);
+
+    const { error } = await supabase.from("transactions").insert([
+      {
+        user_id: user.id,
+        account_id: selectedAccount.id,
+        category_id: type === "transfer" ? null : selectedCategory.id,
+        type,
+        title,
+        amount: parsedAmount,
+        description,
+        date: date.toISOString().split("T")[0],
+        time: date.toTimeString().split(" ")[0],
+      },
+    ]);
+
+    if (error) {
+      Alert.alert("Error", error.message);
+      setLoading(false);
+      return;
+    }
+
+    /* ===== BALANCE UPDATE ===== */
+
+    if (type === "expense") {
+      await supabase
+        .from("accounts")
+        .update({ balance: selectedAccount.balance - parsedAmount })
+        .eq("id", selectedAccount.id);
+    }
+
+    if (type === "income") {
+      await supabase
+        .from("accounts")
+        .update({ balance: selectedAccount.balance + parsedAmount })
+        .eq("id", selectedAccount.id);
+    }
+
+    if (type === "transfer") {
+      await supabase
+        .from("accounts")
+        .update({ balance: selectedAccount.balance - parsedAmount })
+        .eq("id", selectedAccount.id);
+
+      await supabase
+        .from("accounts")
+        .update({ balance: transferAccount.balance + parsedAmount })
+        .eq("id", transferAccount.id);
+    }
+
+    setLoading(false);
+    Alert.alert("Success 🎉", "Transaction added");
+    navigation.goBack();
+  };
+
+  /* ================= UI ================= */
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <ScrollView contentContainerStyle={{ padding: 20 }}>
+        <Text style={styles.title}>Add Transaction</Text>
+
+        {/* TYPE SWITCH */}
+        <View style={styles.typeRow}>
+          {["expense", "income", "transfer"].map((t) => (
+            <TouchableOpacity
+              key={t}
+              style={[styles.typeBtn, type === t && styles.typeActive]}
+              onPress={() => setType(t)}
+            >
+              <Text style={{ color: type === t ? "#000" : "#fff", fontWeight: "600" }}>
+                {t.toUpperCase()}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* TITLE */}
+        <TextInput
+          style={styles.input}
+          placeholder="Title"
+          placeholderTextColor="#aaa"
+          value={title}
+          onChangeText={setTitle}
+        />
+
+        {/* AMOUNT */}
+        <TextInput
+          style={styles.input}
+          placeholder="Amount"
+          placeholderTextColor="#aaa"
+          keyboardType="numeric"
+          value={amount}
+          onChangeText={setAmount}
+        />
+
+        {/* DATE */}
+        <TouchableOpacity style={styles.input} onPress={() => setShowDate(true)}>
+          <Text style={{ color: "#fff" }}>{date.toLocaleDateString()}</Text>
+        </TouchableOpacity>
+
+        {/* TIME */}
+        <TouchableOpacity style={styles.input} onPress={() => setShowTime(true)}>
+          <Text style={{ color: "#fff" }}>{date.toLocaleTimeString()}</Text>
+        </TouchableOpacity>
+
+        {showDate && (
+          <DateTimePicker value={date} mode="date" display="default" onChange={onDateChange} />
+        )}
+
+        {showTime && (
+          <DateTimePicker value={date} mode="time" display="default" onChange={onTimeChange} />
+        )}
+
+        {/* ACCOUNT */}
+        <Text style={styles.section}>Select Account</Text>
+        <View style={styles.wrap}>
+          {accounts.map((acc) => (
+            <TouchableOpacity
+              key={acc.id}
+              style={[styles.box, selectedAccount?.id === acc.id && styles.activeBox]}
+              onPress={() => setSelectedAccount(acc)}
+            >
+              <Text style={{ color: "#fff" }}>{acc.name}</Text>
+              <Text style={{ color: "#ccc" }}>₹{acc.balance}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* TRANSFER */}
+        {type === "transfer" && (
+          <>
+            <Text style={styles.section}>Transfer To</Text>
+            <View style={styles.wrap}>
+              {accounts
+                .filter((a) => a.id !== selectedAccount?.id)
+                .map((acc) => (
+                  <TouchableOpacity
+                    key={acc.id}
+                    style={[styles.box, transferAccount?.id === acc.id && styles.activeBox]}
+                    onPress={() => setTransferAccount(acc)}
+                  >
+                    <Text style={{ color: "#fff" }}>{acc.name}</Text>
+                  </TouchableOpacity>
+                ))}
+            </View>
+          </>
+        )}
+
+        {/* CATEGORY */}
+        {type !== "transfer" && (
+          <>
+            <Text style={styles.section}>Select Category</Text>
+            <View style={styles.wrap}>
+              {categories.map((cat) => (
+                <TouchableOpacity
+                  key={cat.id}
+                  style={[styles.box, selectedCategory?.id === cat.id && styles.activeBox]}
+                  onPress={() => setSelectedCategory(cat)}
+                >
+                  <Text style={{ color: "#fff" }}>{cat.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+
+        {/* SAVE */}
+        <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+          <Text style={styles.saveText}>{loading ? "Saving..." : "Add"}</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  title: { color: colors.gold, fontSize: 24, fontWeight: "700", marginBottom: 20 },
+  typeRow: { flexDirection: "row", gap: 10, marginBottom: 20 },
+  typeBtn: { flex: 1, padding: 12, borderRadius: 12, backgroundColor: "#333", alignItems: "center" },
+  typeActive: { backgroundColor: colors.gold },
+  input: { backgroundColor: colors.card, padding: 14, borderRadius: 12, marginBottom: 14, color: "#fff" },
+  section: { color: "#fff", marginTop: 14, marginBottom: 8, fontWeight: "600" },
+  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  box: { backgroundColor: colors.card, padding: 12, borderRadius: 12, marginBottom: 10 },
+  activeBox: { borderWidth: 2, borderColor: colors.gold },
+  saveBtn: { backgroundColor: colors.gold, padding: 16, borderRadius: 14, marginTop: 30 },
+  saveText: { textAlign: "center", fontWeight: "700", color: "#000" },
+});
+
+
+===== screens/AnalyticsScreen.js =====
+
+// screens/AnalyticsScreen.js
+import { Dimensions, ScrollView, StyleSheet, Text, View } from "react-native";
+import { LineChart } from "react-native-chart-kit";
+import { SafeAreaView } from "react-native-safe-area-context";
+import ScreenHeader from "../components/ScreenHeader";
+import colors from "../theme/colors";
+
+export default function AnalyticsScreen({ navigation }) {
+
+  // Dummy Data (later backend-driven)
+  const lineData = {
+    labels: ["08/25", "09/25", "10/25", "11/25", "12/25", "01/26"],
+    datasets: [
+      {
+        data: [200, 0, 0, 0, 0, 0],
+        color: () => "#f5b38a",
+        strokeWidth: 2,
+      },
+    ],
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScreenHeader title="Analytics" navigation={navigation} />
+
+      <ScrollView showsVerticalScrollIndicator={false}>
+
+        {/* ====== OVERALL SPENDING CARDS ====== */}
+        <View style={styles.row}>
+          <View style={styles.cardSmall}>
+            <Text style={styles.cardTitleSmall}>Current Spending</Text>
+            <Text style={[styles.amountRed, { fontSize: 20 }]}>₹0.00</Text>
+            <Text style={styles.cardSubSmall}>0.0% vs last month</Text>
+          </View>
+
+          <View style={styles.cardSmall}>
+            <Text style={styles.cardTitleSmall}>Monthly Average</Text>
+            <Text style={styles.amountBlue}>₹33.33</Text>
+            <Text style={styles.cardSubSmall}>Last 6 Months</Text>
+          </View>
+
+          <View style={styles.cardSmall}>
+            <Text style={styles.cardTitleSmall}>Predicted</Text>
+            <Text style={styles.amountGreen}>₹60.00</Text>
+            <Text style={styles.cardSubSmall}>Stable</Text>
+          </View>
+        </View>
+
+        {/* ========= TOP CATEGORY ========= */}
+        <View style={styles.bigCard}>
+          <Text style={styles.heading}>Top categories</Text>
+
+          <View style={styles.categoryRow}>
+            <View style={styles.categoryLeft}>
+              <View style={styles.categoryIcon} />
+              <View>
+                <Text style={styles.categoryName}>Food</Text>
+                <Text style={styles.categoryPercent}>100.0% of total</Text>
+              </View>
+            </View>
+
+            <Text style={styles.categoryAmount}>₹200.00</Text>
+          </View>
+        </View>
+
+        {/* ========= MONTHLY OVERVIEW (LINE CHART) ========= */}
+        <View style={styles.bigCard}>
+          <Text style={styles.heading}>Monthly Overview</Text>
+
+          <LineChart
+            data={lineData}
+            width={Dimensions.get("window").width - 32}
+            height={260}
+            chartConfig={{
+              backgroundColor: colors.card,
+              backgroundGradientFrom: colors.card,
+              backgroundGradientTo: colors.card,
+              color: () => "#f5b38a",
+              labelColor: () => "#c6b9b0",
+              propsForDots: {
+                r: "4",
+                strokeWidth: "2",
+                stroke: "#f5b38a",
+              },
+            }}
+            style={{ borderRadius: 12, marginTop: 10 }}
+            bezier
+          />
+        </View>
+
+        {/* ========= SPENDING PREDICTIONS ========= */}
+        <View style={styles.bigCard}>
+          <Text style={styles.heading}>Spending Predictions</Text>
+
+          <Text style={styles.predTitle}>Food</Text>
+          <View style={styles.predRow}>
+            <View>
+              <Text style={styles.predText}>Average Spending: ₹33.33</Text>
+              <Text style={styles.predText}>Predicted: ₹60.00</Text>
+            </View>
+            <Text style={styles.predArrow}>↑</Text>
+          </View>
+        </View>
+
+        {/* ========= ABOUT ANALYSIS ========= */}
+        <View style={styles.bigCard}>
+          <Text style={styles.heading}>About This Analysis</Text>
+
+          <Text style={styles.subHeading}>Calculation Method:</Text>
+          <Text style={styles.listItem}>• Based on last 6 months</Text>
+          <Text style={styles.listItem}>• Transfers excluded</Text>
+          <Text style={styles.listItem}>
+            • Weighted averages (recent months matter more)
+          </Text>
+          <Text style={styles.listItem}>
+            • Anomalies detected using statistical analysis
+          </Text>
+
+          <Text style={styles.subHeading}>Limitations:</Text>
+          <Text style={styles.listItem}>
+            • May not account for irregular expenses
+          </Text>
+          <Text style={styles.listItem}>
+            • Past trends may not reflect future spending
+          </Text>
+          <Text style={styles.listItem}>
+            • Seasonal variations impact accuracy
+          </Text>
+          <Text style={styles.listItem}>
+            • Limited data reduces prediction accuracy
+          </Text>
+
+          <Text style={styles.subHeading}>Weight Distribution:</Text>
+          <Text style={styles.listItem}>• Current month: 30%</Text>
+          <Text style={styles.listItem}>• Last month: 25%</Text>
+          <Text style={styles.listItem}>• 2 months ago: 20%</Text>
+          <Text style={styles.listItem}>• 3 months ago: 15%</Text>
+          <Text style={styles.listItem}>• 4–5 months ago: 5% each</Text>
+        </View>
+
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
+
+  row: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    marginTop: 12,
+  },
+
+  cardSmall: {
+    backgroundColor: colors.card,
+    width: "31%",
+    padding: 14,
+    borderRadius: 16,
+  },
+
+  cardTitleSmall: {
+    color: colors.text,
+    fontSize: 12,
+    marginBottom: 6,
+  },
+
+  amountBlue: { color: "#33aaff", fontWeight: "800", fontSize: 18 },
+  amountGreen: { color: "#79ff8a", fontWeight: "800", fontSize: 18 },
+  amountRed: { color: "#ff7474", fontWeight: "800", fontSize: 18 },
+
+  cardSubSmall: {
+    color: colors.muted,
+    fontSize: 11,
+    marginTop: 4,
+  },
+
+  bigCard: {
+    backgroundColor: colors.card,
+    padding: 18,
+    borderRadius: 18,
+    marginHorizontal: 16,
+    marginTop: 14,
+  },
+
+  heading: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: 12,
+  },
+
+  /* CATEGORY BLOCK */
+  categoryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  categoryLeft: { flexDirection: "row", alignItems: "center" },
+  categoryIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#c68c74",
+    marginRight: 14,
+  },
+  categoryName: { color: colors.text, fontSize: 16, fontWeight: "700" },
+  categoryPercent: { color: colors.muted, fontSize: 12 },
+  categoryAmount: {
+    color: colors.text,
+    fontSize: 17,
+    fontWeight: "700",
+  },
+
+  /* Prediction */
+  predTitle: { color: "#ff7878", fontSize: 18, fontWeight: "700" },
+  predRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 8,
+  },
+  predText: { color: colors.text, marginTop: 4 },
+  predArrow: { color: "#ff7878", fontSize: 22, fontWeight: "800" },
+
+  /* About section */
+  subHeading: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 14,
+  },
+  listItem: {
+    color: colors.muted,
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+});
+
+
+===== screens/BudgetsScreen.js =====
+
+// screens/BudgetsScreen.js
+import { StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
+import FloatingButton from "../components/FloatingButton";
+import ScreenHeader from "../components/ScreenHeader";
+import colors from "../theme/colors";
+
+export default function BudgetsScreen({ navigation }) {
+  const budgets = [];
+
+  return (
+    <SafeAreaView style={styles.container}>
+
+      {/* Header */}
+      <ScreenHeader title="Budgets" navigation={navigation} />
+
+      {budgets.length === 0 ? (
+        <View style={styles.emptyWrapper}>
+          <MaterialCommunityIcons
+            name="piggy-bank"
+            size={52}
+            color="#d6c3b7"
+          />
+          <Text style={styles.emptyTitle}>No budgets found</Text>
+          <Text style={styles.emptySubtitle}>
+            You have not added any budgets yet.{"\n"}
+            Tap the + button to add your first budget.
+          </Text>
+        </View>
+      ) : (
+        <View>{/* Future: real budget list */}</View>
+      )}
+
+      <FloatingButton onPress={() => console.log("Add Budget")} />
+
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.background },
+
+  emptyWrapper: {
+    marginTop: 80,
+    alignItems: "center",
+  },
+
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: 16,
+  },
+
+  emptySubtitle: {
+    color: colors.muted,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 20,
+  },
+});
+
+
+===== screens/CategoriesScreen.js =====
+
+// screens/CategoriesScreen.js
+
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
+import { useCallback, useState } from "react";
+import {
+  FlatList,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+
+export default function CategoriesScreen({ navigation }) {
+  const [tab, setTab] = useState("expense");
+  const [categories, setCategories] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+
+  // 🔁 Fetch data every time screen opens
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [])
+  );
+
+  const fetchData = async () => {
+    const { data: userData } = await supabase.auth.getUser();
+    const user = userData?.user;
+
+    if (!user) return;
+
+    const { data: catData } = await supabase
+      .from("categories")
+      .select("*")
+      .eq("user_id", user.id);
+
+    const { data: txData } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("user_id", user.id);
+
+    setCategories(catData || []);
+    setTransactions(txData || []);
+  };
+
+  // Filter by tab
+  const filteredCategories = categories.filter(
+    (cat) => cat.type === tab
+  );
+
+  const getCategoryStats = (categoryId) => {
+    const related = transactions.filter(
+      (t) => t.category_id === categoryId
+    );
+
+    const total = related.reduce((sum, t) => sum + Number(t.amount), 0);
+
+    return {
+      count: related.length,
+      total,
+    };
+  };
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      {/* HEADER */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <MaterialCommunityIcons name="arrow-left" color="#fff" size={26} />
+        </TouchableOpacity>
+
+        <Text style={styles.title}>Categories</Text>
+
+        <MaterialCommunityIcons name="filter-variant" color="#fff" size={26} />
+      </View>
+
+      {/* LIST */}
+      <FlatList
+        data={filteredCategories}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={{ paddingBottom: 120 }}
+        renderItem={({ item }) => {
+          const stats = getCategoryStats(item.id);
+
+          return (
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() =>
+                navigation.navigate("CategoryDetails", { category: item })
+              }
+            >
+              <View
+                style={[
+                  styles.iconCircle,
+                  { backgroundColor: item.color + "33" },
+                ]}
+              >
+                <MaterialCommunityIcons
+                  name={item.icon}
+                  color={item.color}
+                  size={26}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.catTitle}>{item.name}</Text>
+
+                <Text style={styles.subtitle}>
+                  {stats.count}{" "}
+                  {stats.count === 1
+                    ? "transaction"
+                    : "transactions"}
+                </Text>
+              </View>
+
+              <Text style={styles.amount}>
+                ₹ {stats.total.toFixed(2)}
+              </Text>
+            </TouchableOpacity>
+          );
+        }}
+      />
+
+      {/* Bottom Tabs */}
+      <View style={styles.bottomTabs}>
+        {["expense", "income"].map((type) => (
+          <TouchableOpacity
+            key={type}
+            onPress={() => setTab(type)}
+            style={[
+              styles.tabBtn,
+              tab === type && styles.tabBtnActive,
+            ]}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                tab === type && styles.tabTextActive,
+              ]}
+            >
+              {type === "expense" ? "Expense" : "Income"}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* FAB */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => navigation.navigate("AddCategory")}
+      >
+        <MaterialCommunityIcons name="plus" color="#000" size={28} />
+      </TouchableOpacity>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: { flex: 1, backgroundColor: "#2B1A14" },
+
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    justifyContent: "space-between",
+  },
+
+  title: {
+    fontSize: 26,
+    fontWeight: "700",
+    color: "#EEDDD2",
+  },
+
+  row: {
+    flexDirection: "row",
+    padding: 14,
+    marginHorizontal: 12,
+    marginVertical: 6,
+    borderRadius: 12,
+    backgroundColor: "#3A241C",
+    alignItems: "center",
+  },
+
+  iconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 30,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+
+  catTitle: {
+    color: "#F8EDE3",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+
+  subtitle: {
+    color: "#C8B8AF",
+    fontSize: 13,
+  },
+
+  amount: {
+    color: "#EEDDD2",
+    fontWeight: "700",
+  },
+
+  bottomTabs: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    backgroundColor: "#23150F",
+    padding: 10,
+    justifyContent: "space-around",
+  },
+
+  tabBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    borderRadius: 20,
+  },
+
+  tabBtnActive: {
+    backgroundColor: "#F8C7A0",
+  },
+
+  tabText: { color: "#C8B8AF", fontWeight: "600", fontSize: 14 },
+  tabTextActive: { color: "#000", fontWeight: "700" },
+
+  fab: {
+    position: "absolute",
+    right: 20,
+    bottom: 80,
+    backgroundColor: "#F8C7A0",
+    width: 58,
+    height: 58,
+    borderRadius: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+});
+
+
+===== screens/CategoryDetailsScreen.js =====
+
+// screens/CategoryDetailsScreen.js
+
+import Feather from "@expo/vector-icons/Feather";
+import { useFocusEffect, useRoute } from "@react-navigation/native";
+import { useCallback, useState } from "react";
+import {
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+import colors from "../theme/colors";
+
+export default function CategoryDetailsScreen({ navigation }) {
+  const route = useRoute();
+  const { category } = route.params;
+
+  const [transactions, setTransactions] = useState([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchTransactions();
+    }, [])
+  );
+
+  const fetchTransactions = async () => {
+    const { data: userData } = await supabase.auth.getUser();
+    const user = userData?.user;
+    if (!user) return;
+
+    const { data } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("category_id", category.id);
+
+    setTransactions(data || []);
+  };
+
+  const total = transactions.reduce(
+    (sum, t) => sum + Number(t.amount),
+    0
+  );
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Feather name="arrow-left" size={26} color={colors.text} />
+        </TouchableOpacity>
+
+        <Text style={styles.headerTitle}>{category.name}</Text>
+
+        <View style={{ width: 26 }} />
+      </View>
+
+      <View style={styles.summaryCard}>
+        <Text style={styles.totalAmount}>₹{total.toFixed(2)}</Text>
+        <Text style={styles.subTitle}>
+          {transactions.length} transactions
+        </Text>
+      </View>
+
+      <ScrollView contentContainerStyle={{ padding: 16 }}>
+        {transactions.length === 0 ? (
+          <Text style={styles.noData}>No transactions found</Text>
+        ) : (
+          transactions.map((item) => (
+            <View key={item.id} style={styles.row}>
+              <Text style={styles.categoryLabel}>{item.title}</Text>
+              <Text style={styles.amount}>₹{item.amount}</Text>
+            </View>
+          ))
+        )}
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: "row",
+    padding: 16,
+    justifyContent: "space-between",
+  },
+
+  headerTitle: {
+    fontSize: 22,
+    color: colors.text,
+    fontWeight: "700",
+  },
+
+  summaryCard: {
+    backgroundColor: colors.card,
+    margin: 16,
+    padding: 20,
+    borderRadius: 18,
+    alignItems: "center",
+  },
+
+  totalAmount: {
+    fontSize: 28,
+    fontWeight: "800",
+    color: colors.text,
+  },
+
+  subTitle: {
+    color: colors.muted,
+    marginTop: 4,
+  },
+
+  noData: {
+    textAlign: "center",
+    color: colors.muted,
+    marginTop: 40,
+  },
+
+  row: {
+    backgroundColor: colors.card,
+    padding: 16,
+    borderRadius: 18,
+    marginBottom: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+
+  categoryLabel: {
+    color: colors.text,
+    fontWeight: "600",
+  },
+
+  amount: {
+    fontWeight: "700",
+    color: colors.text,
+  },
+});
+
+
+===== screens/GoalsScreen.js =====
+
+// screens/GoalsScreen.js
+import Feather from "@expo/vector-icons/Feather";
+import { StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import FloatingButton from "../components/FloatingButton";
+import ScreenHeader from "../components/ScreenHeader";
+import colors from "../theme/colors";
+
+export default function GoalsScreen({ navigation }) {
+  const goals = []; // backend later
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {/* Back + Title */}
+      <ScreenHeader title="Goals" navigation={navigation} />
+
+      {/* Empty State */}
+      {goals.length === 0 ? (
+        <View style={styles.emptyWrapper}>
+          <Feather name="target" size={54} color="#d6c3b7" />
+          <Text style={styles.emptyTitle}>No goals found</Text>
+          <Text style={styles.emptySubtitle}>
+            You have not added any goals yet.{"\n"}
+            Tap the + button to add your first goal.
+          </Text>
+        </View>
+      ) : (
+        <View>{/* Future goals list */}</View>
+      )}
+
+      {/* Floating Button */}
+      <FloatingButton onPress={() => console.log("Add Goal")} />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingHorizontal: 16,
+  },
+
+  emptyWrapper: {
+    marginTop: 80,
+    alignItems: "center",
+  },
+
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: 16,
+  },
+
+  emptySubtitle: {
+    color: colors.muted,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 20,
+  },
+});
+
+
+===== screens/HomeScreen.js =====
+
+// screens/HomeScreen.js
+import Feather from "@expo/vector-icons/Feather";
+import { useState } from "react";
+import {
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import colors from "../theme/colors";
+
+export default function HomeScreen({ navigation }) {
+  const [transactions] = useState([]);
+
+  return (
+    <SafeAreaView style={styles.screen}>
+      <ScrollView contentContainerStyle={styles.container}>
+
+        {/* HEADER */}
+        <View style={styles.headerRow}>
+          <View>
+            <Text style={styles.username}>Yash</Text>
+            <Text style={styles.greeting}>Evening, Yash! How’re the finances?</Text>
+          </View>
+
+          <TouchableOpacity style={styles.profilePic}>
+            <Feather name="user" size={24} color={colors.text} />
+          </TouchableOpacity>
+        </View>
+
+        {/* BALANCE CARD */}
+        <View style={styles.balanceCard}>
+          <View style={styles.balanceHeader}>
+            <Text style={styles.balanceTitle}>Total balance</Text>
+            <Feather name="eye-off" size={22} color={colors.text} />
+          </View>
+
+          <Text style={styles.balanceValue}>₹ 0.00</Text>
+
+          <Text style={styles.thisMonthText}>This month</Text>
+
+          <View style={styles.incomeExpenseRow}>
+            <View style={styles.balanceBlock}>
+              <Text style={styles.subTitle}>Income</Text>
+              <Text style={styles.amountGreen}>₹0.00 ↑ 0.00%</Text>
+              <Text style={styles.lightMuted}>Compared to ₹0.00 last month</Text>
+            </View>
+
+            <View style={styles.balanceBlock}>
+              <Text style={styles.subTitle}>Expense</Text>
+              <Text style={styles.amountRed}>₹0.00 ↑ 0.00%</Text>
+              <Text style={styles.lightMuted}>Compared to ₹0.00 last month</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* GRID ITEMS */}
+        <View style={styles.grid}>
+
+          <SectionCard icon="bar-chart" title="Budgets" subtitle="No budgets set" navigation={navigation} />
+          <SectionCard icon="pie-chart" title="Loans" subtitle="No loans" navigation={navigation} />
+          <SectionCard icon="flag" title="Goals" subtitle="No goals set" navigation={navigation} />
+          <SectionCard icon="tag" title="Labels" subtitle="No labels" navigation={navigation} />
+          <SectionCard icon="activity" title="Analytics" subtitle="Stable this month" navigation={navigation} />
+          <SectionCard icon="repeat" title="Recurring" subtitle="No recurring events" navigation={navigation} />
+          <SectionCard icon="grid" title="Categories" subtitle="18 total" navigation={navigation} />
+
+          {/* ⭐ NEW — Weekly Summary Card */}
+          <SectionCard
+            icon="calendar"
+            title="Weekly Summary"
+            subtitle="View spending overview"
+            navigation={navigation}
+          />
+
+        </View>
+
+        {/* CALENDAR SECTION */}
+        <View style={styles.summaryCard}>
+          <Text style={styles.sectionTitle}>Calendar heatmap</Text>
+          <Text style={styles.lightMuted}>No activity yet</Text>
+        </View>
+
+        {/* RECENT TRANSACTIONS */}
+        <View style={styles.summaryCard}>
+          <Text style={styles.sectionTitle}>Recent transactions</Text>
+
+          {transactions.length === 0 && (
+            <Text style={styles.lightMuted}>No transactions yet</Text>
+          )}
+        </View>
+
+      </ScrollView>
+
+          {/* FLOATING + BUTTON */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => navigation.navigate("AddTransaction")}
+      >
+        <Feather name="plus" size={28} color="#000" />
+      </TouchableOpacity>
+
+    </SafeAreaView>
+  );
+}
+
+function SectionCard({ icon, title, subtitle, navigation }) {
+  return (
+    <TouchableOpacity
+      onPress={() => navigation.navigate(title)}
+      style={styles.sectionCard}
+    >
+      <View style={styles.sectionRow}>
+        <Feather name={icon} size={20} color={colors.text} />
+        <Text style={styles.sectionTitleText}>{title}</Text>
+      </View>
+      <Text style={styles.sectionSubtitle}>{subtitle}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/* ====== STYLES ====== */
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.background },
+
+  container: {
+    paddingTop: Platform.OS === "android" ? 20 : 10,
+    paddingHorizontal: 16,
+    paddingBottom: 140,
+  },
+
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 24,
+  },
+
+  username: {
+    fontSize: 26,
+    fontWeight: "800",
+    color: colors.text,
+  },
+
+  greeting: {
+    color: "#d7cfc7",
+    marginTop: 4,
+  },
+
+  profilePic: {
+    backgroundColor: colors.card,
+    padding: 10,
+    borderRadius: 50,
+  },
+
+  balanceCard: {
+    backgroundColor: colors.card,
+    padding: 20,
+    borderRadius: 22,
+    marginBottom: 20,
+  },
+
+  balanceHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+
+  balanceTitle: { color: colors.text, fontSize: 16 },
+
+  balanceValue: {
+    fontSize: 40,
+    fontWeight: "800",
+    color: colors.text,
+    marginTop: 6,
+  },
+
+  thisMonthText: {
+    color: "#d5c8be",
+    marginTop: 10,
+    fontSize: 15,
+  },
+
+  incomeExpenseRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 20,
+  },
+
+  balanceBlock: { width: "48%" },
+
+  subTitle: { color: colors.text, marginBottom: 4 },
+  amountGreen: { color: "#79ff8a", fontWeight: "700" },
+  amountRed: { color: "#ff7676", fontWeight: "700" },
+
+  lightMuted: {
+    color: "#c6b9b0",
+    fontSize: 12,
+    marginTop: 4,
+  },
+
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    marginBottom: 20,
+  },
+
+  sectionCard: {
+    backgroundColor: colors.card,
+    width: "48%",
+    padding: 18,
+    borderRadius: 18,
+    marginBottom: 14,
+  },
+
+  sectionRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
+
+  sectionTitleText: { color: colors.text, fontWeight: "700", marginLeft: 8 },
+
+  sectionSubtitle: { color: "#c6b9b0" },
+
+  summaryCard: {
+    backgroundColor: colors.card,
+    padding: 20,
+    borderRadius: 18,
+    marginBottom: 20,
+  },
+
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 10,
+  },
+
+  fab: {
+    position: "absolute",
+    bottom: 30,
+    right: 30,
+    backgroundColor: colors.gold,
+    padding: 18,
+    borderRadius: 40,
+    elevation: 10,
+  },
+});
+
+
+===== screens/LabelsScreen.js =====
+
+// screens/LabelsScreen.js
+import Feather from "@expo/vector-icons/Feather";
+import { StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import FloatingButton from "../components/FloatingButton";
+import ScreenHeader from "../components/ScreenHeader";
+import colors from "../theme/colors";
+
+export default function LabelsScreen({ navigation }) {
+  const labels = []; // backend later
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {/* Back + Title */}
+      <ScreenHeader title="Labels" navigation={navigation} />
+
+      {/* Empty State */}
+      {labels.length === 0 ? (
+        <View style={styles.emptyWrapper}>
+          <Feather name="tag" size={54} color="#d6c3b7" />
+          <Text style={styles.emptyTitle}>No labels found</Text>
+          <Text style={styles.emptySubtitle}>
+            You have not added any labels yet.{"\n"}
+            Tap the + button to add your first label.
+          </Text>
+        </View>
+      ) : (
+        <View>{/* Label list later */}</View>
+      )}
+
+      {/* Floating Button */}
+      <FloatingButton onPress={() => console.log("Add Label")} />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingHorizontal: 16,
+  },
+
+  emptyWrapper: {
+    marginTop: 80,
+    alignItems: "center",
+  },
+
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: 16,
+  },
+
+  emptySubtitle: {
+    color: colors.muted,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 20,
+  },
+});
+
+
+===== screens/LoansScreen.js =====
+
+// screens/LoansScreen.js
+import Feather from "@expo/vector-icons/Feather";
+import { StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import FloatingButton from "../components/FloatingButton";
+import ScreenHeader from "../components/ScreenHeader"; // ✅ correct import
+import colors from "../theme/colors";
+
+export default function LoansScreen({ navigation }) {
+  const loans = []; // later backend
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {/* 🔙 Back + Title */}
+      <ScreenHeader title="Loans" navigation={navigation} />
+
+      {/* If no loans */}
+      {loans.length === 0 ? (
+        <View style={styles.emptyWrapper}>
+          <Feather name="credit-card" size={52} color="#d6c3b7" />
+          <Text style={styles.emptyTitle}>No loans found</Text>
+          <Text style={styles.emptySubtitle}>
+            You have not added any loans yet.{"\n"}Tap the + button to add your first loan.
+          </Text>
+        </View>
+      ) : (
+        <View>{/* future loan list when backend added */}</View>
+      )}
+
+      {/* ➕ Floating Button */}
+      <FloatingButton onPress={() => console.log("Add Loan")} />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingHorizontal: 16,
+  },
+
+  emptyWrapper: {
+    marginTop: 80,
+    alignItems: "center",
+  },
+
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: 16,
+  },
+
+  emptySubtitle: {
+    color: colors.muted,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 20,
+  },
+});
+
+
+===== screens/LoginScreen.js =====
+
+import { useState } from "react";
+import {
+  Alert,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+import colors from "../theme/colors";
+
+export default function LoginScreen({ navigation }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleLogin = async () => {
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) Alert.alert("Login Failed", error.message);
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.container}>
+        <Text style={styles.title}>Login</Text>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            style={styles.input}
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+          />
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            style={styles.input}
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+          />
+        </View>
+
+        <TouchableOpacity style={styles.btn} onPress={handleLogin}>
+          <Text style={styles.btnText}>Login</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => navigation.navigate("Register")}>
+          <Text style={{ color: colors.muted, marginTop: 12 }}>
+            Create new account
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { padding: 20 },
+  title: { color: colors.gold, fontSize: 26, fontWeight: "700" },
+  card: { backgroundColor: colors.card, padding: 14, borderRadius: 12, marginTop: 16 },
+  label: { color: "#ccc" },
+  input: { backgroundColor: "#000", color: "#fff", padding: 10, borderRadius: 8 },
+  btn: { backgroundColor: colors.gold, padding: 14, borderRadius: 12, marginTop: 20 },
+  btnText: { textAlign: "center", fontWeight: "700", color: "#000" },
+});
+
+
+===== screens/ProfileScreen.js =====
+
+import { Ionicons } from "@expo/vector-icons";
+import {
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+export default function ProfileScreen() {
+  return (
+    <SafeAreaView style={styles.safeArea} edges={["top"]}>
+      <View style={styles.container}>
+
+        {/* Header */}
+        <Text style={styles.title}>Profile</Text>
+
+        {/* Avatar */}
+        <View style={styles.avatarWrapper}>
+          <View style={styles.avatar}>
+            <Ionicons name="person" size={36} color="#000" />
+          </View>
+          <Text style={styles.changePhoto}>Change Photo</Text>
+        </View>
+
+        {/* Name */}
+        <View style={styles.inputCard}>
+          <Text style={styles.label}>Full Name</Text>
+          <TextInput
+            placeholder="Your name"
+            placeholderTextColor="#999"
+            style={styles.input}
+            defaultValue="Yash"
+          />
+        </View>
+
+        {/* Email */}
+        <View style={styles.inputCard}>
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            placeholder="you@email.com"
+            placeholderTextColor="#999"
+            style={styles.input}
+            defaultValue="user@example.com"
+            keyboardType="email-address"
+          />
+        </View>
+
+        {/* Phone */}
+        <View style={styles.inputCard}>
+          <Text style={styles.label}>Phone</Text>
+          <TextInput
+            placeholder="Optional"
+            placeholderTextColor="#999"
+            style={styles.input}
+            keyboardType="phone-pad"
+          />
+        </View>
+
+        {/* Save Button */}
+        <TouchableOpacity style={styles.saveBtn}>
+          <Text style={styles.saveText}>Save Changes</Text>
+        </TouchableOpacity>
+
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#1a0f0a",
+  },
+  container: {
+    flex: 1,
+    padding: 16,
+  },
+
+  title: {
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: "700",
+    marginBottom: 20,
+  },
+
+  avatarWrapper: {
+    alignItems: "center",
+    marginBottom: 24,
+  },
+  avatar: {
+    backgroundColor: "#f5b38a",
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  changePhoto: {
+    color: "#f5b38a",
+    fontSize: 12,
+    marginTop: 6,
+  },
+
+  inputCard: {
+    backgroundColor: "#2a1b14",
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  label: {
+    color: "#ccc",
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  input: {
+    color: "#fff",
+    fontSize: 15,
+  },
+
+  saveBtn: {
+    backgroundColor: "#f5b38a",
+    paddingVertical: 14,
+    borderRadius: 20,
+    alignItems: "center",
+    marginTop: 20,
+  },
+  saveText: {
+    color: "#000",
+    fontWeight: "700",
+    fontSize: 16,
+  },
+});
+
+
+===== screens/RecurringScreen.js =====
+
+// screens/RecurringScreen.js
+import Feather from "@expo/vector-icons/Feather";
+import { StyleSheet, Text, View } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import FloatingButton from "../components/FloatingButton";
+import ScreenHeader from "../components/ScreenHeader";
+import colors from "../theme/colors";
+
+export default function RecurringScreen({ navigation }) {
+  const recurring = []; // backend later
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {/* Back + Title */}
+      <ScreenHeader title="Recurring" navigation={navigation} />
+
+      {/* Empty State */}
+      {recurring.length === 0 ? (
+        <View style={styles.emptyWrapper}>
+          <Feather name="repeat" size={54} color="#d6c3b7" />
+          <Text style={styles.emptyTitle}>No recurring payments</Text>
+          <Text style={styles.emptySubtitle}>
+            You have not added any recurring payments yet.{"\n"}
+            Tap the + button to add your first one.
+          </Text>
+        </View>
+      ) : (
+        <View>{/* recurring list later */}</View>
+      )}
+
+      {/* Floating Button */}
+      <FloatingButton onPress={() => console.log("Add Recurring")} />
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+    paddingHorizontal: 16,
+  },
+
+  emptyWrapper: {
+    marginTop: 80,
+    alignItems: "center",
+  },
+
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: 16,
+  },
+
+  emptySubtitle: {
+    color: colors.muted,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 20,
+  },
+});
+
+
+===== screens/RegisterScreen.js =====
+
+import { useState } from "react";
+import {
+  Alert,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { supabase } from "../lib/supabase";
+import colors from "../theme/colors";
+
+export default function RegisterScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleRegister = async () => {
+    if (!email || !password || !name) {
+      Alert.alert("Error", "All fields are required");
+      return;
+    }
+
+    setLoading(true);
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+
+    if (error) {
+      Alert.alert("Signup Failed", error.message);
+      setLoading(false);
+      return;
+    }
+
+    // Save profile
+    await supabase.from("profiles").insert({
+      id: data.user.id,
+      name,
+      email,
+    });
+
+    setLoading(false);
+
+    Alert.alert(
+      "Success 🎉",
+      "Account created successfully. You are now logged in."
+    );
+
+    // ❌ DO NOT NAVIGATE
+    // AppNavigator will auto-redirect
+  };
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.container}>
+        <Text style={styles.title}>Create Account</Text>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Name</Text>
+          <TextInput
+            style={styles.input}
+            value={name}
+            onChangeText={setName}
+          />
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Email</Text>
+          <TextInput
+            style={styles.input}
+            autoCapitalize="none"
+            value={email}
+            onChangeText={setEmail}
+          />
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.label}>Password</Text>
+          <TextInput
+            style={styles.input}
+            secureTextEntry
+            value={password}
+            onChangeText={setPassword}
+          />
+        </View>
+
+        <TouchableOpacity style={styles.btn} onPress={handleRegister}>
+          <Text style={styles.btnText}>
+            {loading ? "Creating..." : "Create Account"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.background },
+  container: { padding: 20 },
+  title: {
+    color: colors.gold,
+    fontSize: 26,
+    fontWeight: "700",
+    marginBottom: 20,
+  },
+  card: {
+    backgroundColor: colors.card,
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 14,
+  },
+  label: { color: "#ccc" },
+  input: {
+    color: "#fff",
+    backgroundColor: "#000",
+    padding: 10,
+    borderRadius: 8,
+  },
+  btn: {
+    backgroundColor: colors.gold,
+    padding: 14,
+    borderRadius: 12,
+    marginTop: 10,
+  },
+  btnText: {
+    textAlign: "center",
+    fontWeight: "700",
+    color: "#000",
+  },
+});
+
+
+===== screens/ReportsScreen.js =====
+
+import { Ionicons } from "@expo/vector-icons";
+import {
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+
+export default function ReportsScreen() {
+  return (
+    <SafeAreaView style={styles.safeArea} edges={["top"]}>
+      <View style={styles.container}>
+
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.title}>Reports</Text>
+
+          <TouchableOpacity style={styles.filterBtn}>
+            <Ionicons name="filter-outline" size={20} color="#000" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Empty State */}
+        <View style={styles.empty}>
+          <Ionicons
+            name="pie-chart-outline"
+            size={64}
+            color="#999"
+          />
+
+          <Text style={styles.emptyTitle}>
+            No reports data
+          </Text>
+
+          <Text style={styles.emptySub}>
+            Add transactions to generate reports
+          </Text>
+
+          <TouchableOpacity style={styles.refreshBtn}>
+            <Ionicons name="refresh-outline" size={18} color="#000" />
+            <Text style={styles.refreshText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#1a0f0a",
+  },
+  container: {
+    flex: 1,
+    padding: 16,
+  },
+
+  /* Header */
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  title: {
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: "700",
+  },
+  filterBtn: {
+    backgroundColor: "#f5b38a",
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  /* Empty State */
+  empty: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: -40,
+  },
+  emptyTitle: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+    marginTop: 16,
+  },
+  emptySub: {
+    color: "#aaa",
+    fontSize: 13,
+    marginTop: 6,
+    textAlign: "center",
+    paddingHorizontal: 30,
+  },
+
+  refreshBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f5b38a",
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginTop: 20,
+  },
+  refreshText: {
+    color: "#000",
+    fontWeight: "700",
+    marginLeft: 6,
+  },
+});
+
+
+===== screens/TransactionsScreen.js =====
+
+// screens/TransactionsScreen.js
+import Feather from "@expo/vector-icons/Feather";
+import { useState } from "react";
+import {
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import colors from "../theme/colors";
+
+export default function TransactionsScreen({ navigation, route }) {
+
+  // Dummy data (later replace with backend)
+  const allTransactions = [
+    {
+      id: 1,
+      category: "Food",
+      amount: 200,
+      type: "expense",
+      date: new Date(2026, 0, 2, 19, 15), // Jan 2
+      location: "Maharashtra",
+    }
+  ];
+
+  // UI tab switching
+  const [activeTab, setActiveTab] = useState("Daily");
+
+  // Date helpers
+  const today = new Date();
+
+  const isSameDay = (d1, d2) =>
+    d1.getDate() === d2.getDate() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getFullYear() === d2.getFullYear();
+
+  const isInSameWeek = (date) => {
+    const current = new Date();
+    const start = new Date(current);
+    start.setDate(current.getDate() - 6);
+    return date >= start && date <= current;
+  };
+
+  const isSameMonth = (date) =>
+    date.getMonth() === today.getMonth() &&
+    date.getFullYear() === today.getFullYear();
+
+  const isSameYear = (date) =>
+    date.getFullYear() === today.getFullYear();
+
+  // Filter logic
+  const filteredTransactions =
+    activeTab === "Daily"
+      ? allTransactions.filter((t) => isSameDay(t.date, today))
+      : activeTab === "Weekly"
+      ? allTransactions.filter((t) => isInSameWeek(t.date))
+      : activeTab === "Monthly"
+      ? allTransactions.filter((t) => isSameMonth(t.date))
+      : allTransactions.filter((t) => isSameYear(t.date));
+
+  const formatDate = (date) =>
+    date.toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+
+  return (
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
+      
+      {/* HEADER */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Feather name="arrow-left" size={26} color={colors.text} />
+        </TouchableOpacity>
+
+        <Text style={styles.headerTitle}>Transactions</Text>
+
+        <View style={{ width: 26 }} /> 
+      </View>
+
+      {/* LIST */}
+      <ScrollView contentContainerStyle={styles.container}>
+
+        {filteredTransactions.length === 0 ? (
+          <Text style={styles.noData}>No transactions found</Text>
+        ) : (
+          filteredTransactions.map((item) => (
+            <View key={item.id} style={styles.row}>
+
+              <View style={styles.left}>
+                <View style={styles.iconBox}>
+                  <Feather name="coffee" size={20} color={colors.text} />
+                </View>
+
+                <View>
+                  <Text style={styles.category}>{item.category}</Text>
+                  <Text style={styles.sub}>
+                    {item.location} • {formatDate(item.date)}
+                  </Text>
+                </View>
+              </View>
+
+              <View>
+                <Text
+                  style={[
+                    styles.amount,
+                    { color: item.type === "expense" ? "#ff7474" : "#79ff8a" },
+                  ]}
+                >
+                  {item.type === "expense" ? "-" : "+"}₹{item.amount}
+                </Text>
+                <Text style={styles.sub}>
+                  {item.date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </Text>
+              </View>
+
+            </View>
+          ))
+        )}
+
+      </ScrollView>
+
+      {/* TABS */}
+      <View style={styles.tabBar}>
+        {["Daily", "Weekly", "Monthly", "Yearly"].map((tab) => (
+          <TouchableOpacity
+            key={tab}
+            onPress={() => setActiveTab(tab)}
+            style={[
+              styles.tabItem,
+              activeTab === tab && styles.activeTab,
+            ]}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                activeTab === tab && styles.activeTabText,
+              ]}
+            >
+              {tab}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 15,
+  },
+
+  headerTitle: {
+    flex: 1,
+    textAlign: "center",
+    fontSize: 22,
+    fontWeight: "700",
+    color: colors.text,
+  },
+
+  container: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 120 },
+
+  noData: {
+    color: colors.muted,
+    textAlign: "center",
+    marginTop: 50,
+    fontSize: 16,
+  },
+
+  row: {
+    backgroundColor: colors.card,
+    padding: 16,
+    borderRadius: 18,
+    marginBottom: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+  },
+
+  left: { flexDirection: "row", alignItems: "center" },
+
+  iconBox: {
+    backgroundColor: colors.border,
+    padding: 10,
+    borderRadius: 40,
+    marginRight: 10,
+  },
+
+  category: { color: colors.text, fontSize: 16, fontWeight: "600" },
+
+  sub: { color: colors.muted, fontSize: 12 },
+
+  amount: { fontSize: 16, fontWeight: "700", textAlign: "right" },
+
+  tabBar: {
+    flexDirection: "row",
+    backgroundColor: colors.card,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    justifyContent: "space-around",
+  },
+
+  tabItem: {
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+  },
+
+  tabText: { color: colors.text, fontSize: 15 },
+
+  activeTab: { backgroundColor: colors.gold },
+
+  activeTabText: { color: "#000", fontWeight: "700" },
+});
+
+
+===== components/EmptyState.js =====
+
+// components/EmptyState.js
+import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { StyleSheet, Text, View } from "react-native";
+import colors from "../theme/colors";
+
+export default function EmptyState({ icon, title, subtitle }) {
+  return (
+    <View style={styles.container}>
+      <MaterialCommunityIcons
+        name={icon}
+        size={70}
+        color="#d6c3b7"
+        style={{ marginBottom: 20 }}
+      />
+
+      <Text style={styles.title}>{title}</Text>
+      <Text style={styles.subtitle}>{subtitle}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    alignItems: "center",
+    paddingTop: 80,
+    paddingHorizontal: 20,
+  },
+  title: {
+    fontSize: 20,
+    color: colors.text,
+    fontWeight: "700",
+    marginTop: 15,
+  },
+  subtitle: {
+    textAlign: "center",
+    color: colors.muted,
+    marginTop: 8,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+});
+
+
+===== components/FloatingButton.js =====
+
+// components/FloatingButton.js
+import Feather from "@expo/vector-icons/Feather";
+import { StyleSheet, TouchableOpacity } from "react-native";
+
+export default function FloatingButton({ onPress }) {
+  return (
+    <TouchableOpacity style={styles.fab} onPress={onPress}>
+      <Feather name="plus" size={26} color="#000" />
+    </TouchableOpacity>
+  );
+}
+
+const styles = StyleSheet.create({
+  fab: {
+    position: "absolute",
+    bottom: 30,
+    right: 30,
+    backgroundColor: "#f8c7a0",
+    padding: 18,
+    borderRadius: 40,
+    elevation: 10,
+  },
+});
+
+
+===== components/ScreenHeader.js =====
+
+import Feather from "@expo/vector-icons/Feather";
+import { useNavigation } from "@react-navigation/native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import colors from "../theme/colors";
+
+export default function ScreenHeader({ title }) {
+  const navigation = useNavigation();
+
+  return (
+    <View style={styles.header}>
+      <TouchableOpacity onPress={() => navigation.goBack()}>
+        <Feather name="arrow-left" size={26} color={colors.text} />
+      </TouchableOpacity>
+
+      <Text style={styles.title}>{title}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    paddingTop: 20,
+  },
+  title: {
+    color: colors.text,
+    fontSize: 22,
+    fontWeight: "700",
+    marginLeft: 14,
+  },
+});

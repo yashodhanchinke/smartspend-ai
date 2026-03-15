@@ -1,0 +1,4 @@
+project_id = "smartspend-ai"
+
+[functions.generate-analytics-summary]
+verify_jwt = false
