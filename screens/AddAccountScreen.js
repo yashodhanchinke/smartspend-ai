@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
     Alert,
     StyleSheet,
@@ -9,12 +9,17 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
+import { getAccountColor } from "../util/accountAppearance";
 
 export default function AddAccountScreen({ navigation }) {
   const [name, setName] = useState("");
   const [balance, setBalance] = useState("");
   const [type, setType] = useState("bank");
-  const [color, setColor] = useState("#1f4e79");
+  const [color, setColor] = useState("");
+
+  useEffect(() => {
+    setColor(getAccountColor({ name, type }));
+  }, [name, type]);
 
   const saveAccount = async () => {
     if (!name) {
@@ -32,7 +37,7 @@ export default function AddAccountScreen({ navigation }) {
         name,
         balance: parseFloat(balance || 0),
         type,
-        color,
+        color: getAccountColor({ name, type, color }),
       },
     ]);
 

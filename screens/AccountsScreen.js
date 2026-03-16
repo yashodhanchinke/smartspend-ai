@@ -1,6 +1,6 @@
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Dimensions,
   FlatList,
@@ -12,178 +12,357 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
+import { getAccountColor, getAccountIconName } from "../util/accountAppearance";
+import { showTransactionEntryOptions } from "../util/transactionEntry";
 
 const { width } = Dimensions.get("window");
 
-export default function AccountsScreen({ navigation }) {
+const DEFAULT_ACCOUNTS = [
+  { id: "bank-default", name: "Bank", type: "bank", balance: 0 },
+  { id: "cash-default", name: "Cash", type: "cash", balance: 0 },
+];
+
+export default function AccountsScreen({ navigation, route }) {
   const [accounts, setAccounts] = useState([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [transactions, setTransactions] = useState([]);
-
-  // ✅ NEW STATES
   const [incomeTotal, setIncomeTotal] = useState(0);
   const [expenseTotal, setExpenseTotal] = useState(0);
+  const [profileName, setProfileName] = useState("");
+  const flatRef = useRef(null);
+  const selectedAccountIdRef = useRef(null);
 
-  const flatRef = useRef();
+  const selectedAccount = accounts[selectedIndex] || null;
 
-  /* ================= REFRESH ON SCREEN FOCUS ================= */
-  useFocusEffect(
-    useCallback(() => {
-      fetchAccounts();
-    }, [])
-  );
+  useEffect(() => {
+    selectedAccountIdRef.current = selectedAccount?.id || null;
+  }, [selectedAccount?.id]);
 
-  /* ================= FETCH ACCOUNTS ================= */
-  const fetchAccounts = async () => {
-    const { data } = await supabase
-      .from("accounts")
-      .select("*")
-      .order("created_at");
+  const hydrateAccounts = useCallback((data) => {
+    const baseAccounts = data?.length ? data : DEFAULT_ACCOUNTS;
+    const usedColors = new Set();
 
-    if (!data || data.length === 0) {
-      setAccounts([
-        { id: "bank-default", name: "Bank", balance: 0, color: "#1f4e79" },
-        { id: "cash-default", name: "Cash", balance: 0, color: "#295f2d" },
-      ]);
-    } else {
-      setAccounts(data);
-      fetchTransactions(data[0].id);
+    return baseAccounts.map((account, index) => {
+      let nextColor = getAccountColor(account, index);
+
+      if (usedColors.has(nextColor)) {
+        nextColor = getAccountColor({ ...account, color: null }, index + 1);
+      }
+
+      usedColors.add(nextColor);
+
+      return {
+        ...account,
+        color: nextColor,
+      };
+    });
+  }, []);
+
+  const fetchTransactions = useCallback(async (account) => {
+    if (!account) {
+      setTransactions([]);
+      setIncomeTotal(0);
+      setExpenseTotal(0);
+      return;
     }
 
-    setSelectedIndex(0);
-  };
+    const isDefaultAccount = String(account.id).includes("-default");
+    let query = supabase.from("transactions").select(`
+      *,
+      categories(name,color,icon)
+    `);
 
-  /* ================= FETCH TRANSACTIONS ================= */
-  const fetchTransactions = async (accountId) => {
-    const { data } = await supabase
-      .from("transactions")
-      .select("*, categories(name,color)")
-      .eq("account_id", accountId)
-      .order("date", { ascending: false });
+    if (isDefaultAccount) {
+      query = query.eq("account_id", "__no_account__");
+    } else {
+      query = query.or(`account_id.eq.${account.id},to_account_id.eq.${account.id}`);
+    }
+
+    const { data } = await query.order("date", { ascending: false }).order("created_at", {
+      ascending: false,
+    });
 
     const tx = data || [];
     setTransactions(tx);
 
-    // ✅ CALCULATE TOTALS
     let income = 0;
     let expense = 0;
 
-    tx.forEach((t) => {
-      if (t.type === "income") income += Number(t.amount);
-      if (t.type === "expense") expense += Number(t.amount);
+    tx.forEach((transaction) => {
+      const amount = Number(transaction.amount || 0);
+
+      if (transaction.type === "income") {
+        income += amount;
+      } else if (transaction.type === "expense") {
+        expense += amount;
+      } else if (transaction.type === "transfer") {
+        if (transaction.account_id === account.id) {
+          expense += amount;
+        }
+
+        if (transaction.to_account_id === account.id) {
+          income += amount;
+        }
+      }
     });
 
     setIncomeTotal(income);
     setExpenseTotal(expense);
+  }, []);
+
+  const fetchAccounts = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setAccounts(hydrateAccounts([]));
+      return;
+    }
+
+    const [{ data: accountData }, { data: profile }] = await Promise.all([
+      supabase.from("accounts").select("*").eq("user_id", user.id).order("created_at"),
+      supabase.from("profiles").select("name").eq("id", user.id).single(),
+    ]);
+
+    const hydrated = hydrateAccounts(accountData);
+    const previousAccountId = selectedAccountIdRef.current;
+    const nextIndex = Math.max(
+      hydrated.findIndex((account) => account.id === previousAccountId),
+      0
+    );
+
+    setProfileName(profile?.name || "");
+    setAccounts(hydrated);
+    setSelectedIndex(nextIndex);
+
+    if (hydrated.length > 0 && nextIndex > 0) {
+      requestAnimationFrame(() => {
+        flatRef.current?.scrollToOffset?.({
+          offset: width * nextIndex,
+          animated: false,
+        });
+      });
+    }
+
+    await fetchTransactions(hydrated[nextIndex]);
+  }, [fetchTransactions, hydrateAccounts]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchAccounts();
+    }, [fetchAccounts])
+  );
+
+  useEffect(() => {
+    if (route?.params?.refreshAt) {
+      fetchAccounts();
+    }
+  }, [fetchAccounts, route?.params?.refreshAt]);
+
+  useEffect(() => {
+    let isMounted = true;
+    let channel;
+
+    const subscribe = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user || !isMounted) {
+        return;
+      }
+
+      channel = supabase
+        .channel(`accounts-screen-${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "accounts",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchAccounts();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "transactions",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchAccounts();
+          }
+        )
+        .subscribe();
+    };
+
+    subscribe();
+
+    return () => {
+      isMounted = false;
+
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [fetchAccounts]);
+
+  const handleScrollEnd = ({ nativeEvent }) => {
+    const index = Math.round(nativeEvent.contentOffset.x / width);
+    const safeIndex = Math.max(0, Math.min(index, accounts.length - 1));
+
+    setSelectedIndex(safeIndex);
+    fetchTransactions(accounts[safeIndex]);
   };
 
-  /* ================= HANDLE SLIDE ================= */
-  const handleScrollEnd = (e) => {
-    const index = Math.round(e.nativeEvent.contentOffset.x / width);
-    setSelectedIndex(index);
+  const renderCard = ({ item, index }) => (
+    <View style={styles.cardPage}>
+      <View style={[styles.accountCard, { backgroundColor: item.color }]}>
+        <View style={styles.cardHeader}>
+          <View style={styles.cardHeaderTextWrap}>
+            <View style={styles.cardHeaderText}>
+              <Text style={styles.accountTitle} numberOfLines={1}>
+                {item.name}
+              </Text>
+              <Text style={styles.accountUser}>
+                {(profileName || "Account").trim().split(" ")[0]}
+              </Text>
+            </View>
+          </View>
 
-    const accountId = accounts[index]?.id;
-    if (accountId) fetchTransactions(accountId);
-  };
-
-  /* ================= CARD ================= */
-  const renderCard = ({ item }) => (
-    <View style={[styles.accountCard, { backgroundColor: item.color || "#333" }]}>
-      <View style={styles.cardHeader}>
-        <View>
-          <Text style={styles.accountTitle}>{item.name}</Text>
-          <Text style={styles.accountUser}>Yash</Text>
+          <View style={styles.accountIconWrap}>
+            <Ionicons name={getAccountIconName(item)} size={26} color="#f7efe8" />
+          </View>
         </View>
-        <Ionicons
-          name={item.name === "Cash" ? "cash-outline" : "business-outline"}
-          size={24}
-          color="#fff"
-        />
-      </View>
 
-      <Text style={styles.balanceLabel}>Total balance</Text>
-      <Text style={styles.balanceValue}>₹{item.balance?.toFixed(2) || "0.00"}</Text>
+        <View style={styles.balanceBlock}>
+          <Text style={styles.balanceLabel}>Total balance</Text>
+          <Text style={styles.balanceValue}>₹{Number(item.balance || 0).toFixed(2)}</Text>
+        </View>
+
+        <Text style={styles.cardCount}>
+          Account {index + 1} of {accounts.length}
+        </Text>
+      </View>
     </View>
   );
 
+  const emptyAccountName = selectedAccount?.name || "this account";
+
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* ===== ACCOUNT SLIDER ===== */}
-      <FlatList
-        ref={flatRef}
-        data={accounts}
-        renderItem={renderCard}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        keyExtractor={(item) => item.id}
-        onMomentumScrollEnd={handleScrollEnd}
-      />
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
+        <FlatList
+          ref={flatRef}
+          data={accounts}
+          renderItem={renderCard}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          keyExtractor={(item) => String(item.id)}
+          onMomentumScrollEnd={handleScrollEnd}
+          nestedScrollEnabled
+        />
 
-      {/* ===== DOT INDICATOR ===== */}
-      <View style={styles.dots}>
-        {accounts.map((_, i) => (
-          <View key={i} style={[styles.dot, selectedIndex === i && styles.activeDot]} />
-        ))}
-      </View>
-
-      {/* ===== SUMMARY (AUTO UPDATED) ===== */}
-      <View style={styles.compareRow}>
-        <View>
-          <Text style={styles.compareLabel}>Income</Text>
-          <Text style={styles.income}>₹{incomeTotal.toFixed(2)}</Text>
-          <Text style={styles.compareSub}>Total income</Text>
+        <View style={styles.dots}>
+          {accounts.map((account, index) => (
+            <View
+              key={account.id}
+              style={[
+                styles.dot,
+                selectedIndex === index && [styles.activeDot, { backgroundColor: account.color }],
+              ]}
+            />
+          ))}
         </View>
 
-        <View>
-          <Text style={styles.compareLabel}>Expense</Text>
-          <Text style={styles.expense}>₹{expenseTotal.toFixed(2)}</Text>
-          <Text style={styles.compareSub}>Total expense</Text>
-        </View>
-      </View>
-
-      {/* ===== TRANSACTIONS ===== */}
-      <ScrollView style={{ marginTop: 20 }}>
-        {transactions.length === 0 ? (
-          <View style={styles.empty}>
-            <Ionicons name="wallet-outline" size={48} color="#aaa" />
-            <Text style={styles.emptyTitle}>No transactions found for Yash</Text>
-            <Text style={styles.emptySub}>
-              Please add transactions to this account
-            </Text>
+        <View style={styles.compareRow}>
+          <View style={styles.summaryCard}>
+            <Text style={styles.compareLabel}>Income</Text>
+            <Text style={styles.income}>₹{incomeTotal.toFixed(2)}</Text>
+            <Text style={styles.compareSub}>For {emptyAccountName}</Text>
           </View>
-        ) : (
-          transactions.map((t) => (
-            <View key={t.id} style={styles.txRow}>
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <View
-                  style={[
-                    styles.catIcon,
-                    { backgroundColor: t.categories?.color || "#444" },
-                  ]}
-                />
-                <View>
-                  <Text style={styles.txTitle}>{t.title}</Text>
-                  <Text style={styles.txSub}>{t.categories?.name}</Text>
-                </View>
-              </View>
 
-              <Text
-                style={{
-                  color: t.type === "expense" ? "#ff8b8b" : "#6ddf9c",
-                  fontWeight: "700",
-                }}
-              >
-                {t.type === "expense" ? "-" : "+"}₹{t.amount}
-              </Text>
+          <View style={styles.summaryCard}>
+            <Text style={styles.compareLabel}>Expense</Text>
+            <Text style={styles.expense}>₹{expenseTotal.toFixed(2)}</Text>
+            <Text style={styles.compareSub}>For {emptyAccountName}</Text>
+          </View>
+        </View>
+
+        <View style={styles.txSection}>
+          {transactions.length === 0 ? (
+            <View style={styles.empty}>
+              <Ionicons name="wallet-outline" size={54} color="#e8d9d1" />
+              <Text style={styles.emptyTitle}>No transactions found for {emptyAccountName}</Text>
+              <Text style={styles.emptySub}>Please add transactions to this account</Text>
             </View>
-          ))
-        )}
+          ) : (
+            transactions.map((transaction) => {
+              const amount = Number(transaction.amount || 0);
+              const isExpense =
+                transaction.type === "expense" ||
+                (transaction.type === "transfer" &&
+                  transaction.account_id === selectedAccount?.id);
+              const amountColor = isExpense ? "#ff8b8b" : "#6ddf9c";
+
+              return (
+                <View key={transaction.id} style={styles.txRow}>
+                  <View style={styles.txLeft}>
+                    <View
+                      style={[
+                        styles.catIcon,
+                        { backgroundColor: transaction.categories?.color || "#5a4138" },
+                      ]}
+                    >
+                      <MaterialCommunityIcons
+                        name={transaction.categories?.icon || "bank-transfer"}
+                        size={18}
+                        color="#fff6ef"
+                      />
+                    </View>
+
+                    <View style={styles.txCopy}>
+                      <Text style={styles.txTitle}>
+                        {transaction.title || transaction.categories?.name || "Transaction"}
+                      </Text>
+                      <Text style={styles.txSub}>
+                        {transaction.type === "transfer"
+                          ? transaction.account_id === selectedAccount?.id
+                            ? "Transfer sent"
+                            : "Transfer received"
+                          : transaction.categories?.name || "Uncategorized"}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Text style={[styles.txAmount, { color: amountColor }]}>
+                    {isExpense ? "-" : "+"}₹{amount.toFixed(2)}
+                  </Text>
+                </View>
+              );
+            })
+          )}
+        </View>
       </ScrollView>
 
-      {/* ===== ADD ACCOUNT BUTTON ===== */}
-      <TouchableOpacity style={styles.fab} onPress={() => navigation.navigate("AddAccount")}>
-        <Ionicons name="add" size={26} color="#000" />
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() =>
+          showTransactionEntryOptions(navigation, { accountId: selectedAccount?.id })
+        }
+      >
+        <Ionicons name="add" size={26} color="#20120d" />
       </TouchableOpacity>
     </SafeAreaView>
   );
@@ -191,78 +370,173 @@ export default function AccountsScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#1a0f0a" },
-
+  content: { flex: 1 },
+  contentContainer: { paddingTop: 8, paddingBottom: 120 },
+  cardPage: {
+    width,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 20,
+  },
   accountCard: {
-    width: width - 40,
-    marginHorizontal: 20,
-    borderRadius: 24,
-    padding: 20,
+    width: "100%",
+    minHeight: 205,
+    borderRadius: 28,
+    padding: 22,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.35)",
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
   },
-
   cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 20,
+    position: "relative",
+    minHeight: 48,
+    justifyContent: "center",
   },
-
-  accountTitle: { color: "#fff", fontSize: 18, fontWeight: "700" },
-  accountUser: { color: "#ddd", fontSize: 13 },
-
-  balanceLabel: { color: "#ddd", fontSize: 13 },
+  cardHeaderTextWrap: {
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingLeft: 20,
+    paddingRight: 68,
+  },
+  cardHeaderText: {
+    width: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  accountTitle: { color: "#fff8f2", fontSize: 16, fontWeight: "800", textAlign: "center" },
+  accountUser: {
+    color: "rgba(255,255,255,0.72)",
+    fontSize: 14,
+    marginTop: 4,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+  accountIconWrap: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  balanceBlock: { marginTop: 44 },
+  balanceLabel: {
+    color: "rgba(255,255,255,0.82)",
+    fontSize: 14,
+    fontWeight: "600",
+  },
   balanceValue: {
     color: "#fff",
     fontSize: 30,
-    fontWeight: "800",
-    marginTop: 6,
+    fontWeight: "900",
+    marginTop: 8,
   },
-
-  dots: { flexDirection: "row", justifyContent: "center", marginTop: 10 },
+  cardCount: {
+    color: "rgba(255,255,255,0.7)",
+    marginTop: 18,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  dots: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 28,
+    marginTop: 14,
+    gap: 8,
+  },
   dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 5,
-    backgroundColor: "#555",
-    marginHorizontal: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: "#6a5650",
   },
-  activeDot: { backgroundColor: "#f5b38a", width: 16 },
-
+  activeDot: {
+    width: 20,
+  },
   compareRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    gap: 14,
     paddingHorizontal: 20,
-    marginTop: 10,
+    marginTop: 18,
   },
-
-  compareLabel: { color: "#ccc", fontSize: 13 },
-  income: { color: "#6ddf9c", fontWeight: "700", marginTop: 4 },
-  expense: { color: "#ff8b8b", fontWeight: "700", marginTop: 4 },
-  compareSub: { color: "#aaa", fontSize: 11 },
-
-  empty: { alignItems: "center", marginTop: 60 },
-  emptyTitle: { color: "#fff", marginTop: 12, fontWeight: "700" },
-  emptySub: { color: "#aaa", marginTop: 6, fontSize: 12 },
-
+  summaryCard: {
+    flex: 1,
+    backgroundColor: "#241611",
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#3c2822",
+  },
+  compareLabel: { color: "#f1dfd5", fontSize: 16, fontWeight: "700" },
+  income: { color: "#6ddf9c", fontWeight: "800", fontSize: 22, marginTop: 6 },
+  expense: { color: "#ff8b8b", fontWeight: "800", fontSize: 22, marginTop: 6 },
+  compareSub: { color: "#bfa9a0", fontSize: 12, marginTop: 8 },
+  txSection: { marginTop: 20, paddingHorizontal: 20 },
+  empty: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    minHeight: 280,
+  },
+  emptyTitle: {
+    color: "#fff",
+    marginTop: 14,
+    fontWeight: "700",
+    fontSize: 22,
+    textAlign: "center",
+  },
+  emptySub: {
+    color: "#bfa9a0",
+    marginTop: 8,
+    fontSize: 15,
+    textAlign: "center",
+  },
   txRow: {
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
-    padding: 16,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "#333",
+    backgroundColor: "#241611",
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#3c2822",
   },
-
-  catIcon: { width: 36, height: 36, borderRadius: 18, marginRight: 10 },
-  txTitle: { color: "#fff", fontWeight: "600" },
-  txSub: { color: "#aaa", fontSize: 12 },
-
+  txLeft: { flexDirection: "row", alignItems: "center", flex: 1, marginRight: 12 },
+  catIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    marginRight: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  txCopy: { flex: 1 },
+  txTitle: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  txSub: { color: "#bfa9a0", fontSize: 12, marginTop: 4 },
+  txAmount: { fontWeight: "800", fontSize: 15 },
   fab: {
     position: "absolute",
     right: 20,
-    bottom: 30,
-    backgroundColor: "#f5b38a",
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    bottom: 28,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: "#ffb28f",
     alignItems: "center",
     justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 6,
   },
 });

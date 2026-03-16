@@ -1,7 +1,7 @@
 // screens/AddTransactionScreen.js
 
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   ScrollView,
@@ -14,14 +14,15 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
+import { saveTransaction } from "../util/saveTransaction";
 
-export default function AddTransactionScreen({ navigation }) {
+export default function AddTransactionScreen({ navigation, route }) {
 
   const [type, setType] = useState("expense");
 
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
+  const description = "";
 
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -36,29 +37,40 @@ export default function AddTransactionScreen({ navigation }) {
 
   const [loading, setLoading] = useState(false);
 
-  /* ================= LOAD DATA ================= */
-
-  useEffect(() => {
-    fetchAccounts();
-  }, []);
-
-  useEffect(() => {
-    if (type !== "transfer") fetchCategories();
-  }, [type]);
-
-  const fetchAccounts = async () => {
+  const fetchAccounts = useCallback(async () => {
     const { data } = await supabase.from("accounts").select("*");
-    setAccounts(data || []);
-  };
+    const nextAccounts = data || [];
+    setAccounts(nextAccounts);
 
-  const fetchCategories = async () => {
+    const preselectedAccountId = route?.params?.accountId;
+
+    if (preselectedAccountId) {
+      const matchedAccount = nextAccounts.find((account) => account.id === preselectedAccountId);
+
+      if (matchedAccount) {
+        setSelectedAccount(matchedAccount);
+      }
+    }
+  }, [route?.params?.accountId]);
+
+  const fetchCategories = useCallback(async () => {
     const { data } = await supabase
       .from("categories")
       .select("*")
       .eq("type", type);
 
     setCategories(data || []);
-  };
+  }, [type]);
+
+  /* ================= LOAD DATA ================= */
+
+  useEffect(() => {
+    fetchAccounts();
+  }, [fetchAccounts]);
+
+  useEffect(() => {
+    if (type !== "transfer") fetchCategories();
+  }, [fetchCategories, type]);
 
   /* ================= DATE HANDLERS ================= */
 
@@ -104,101 +116,29 @@ export default function AddTransactionScreen({ navigation }) {
       data: { user },
     } = await supabase.auth.getUser();
 
-    const parsedAmount = parseFloat(amount);
-
-    /* ================= INSERT TRANSACTION ================= */
-
-    const { error } = await supabase.from("transactions").insert([
-      {
-        user_id: user.id,
-
-        account_id: selectedAccount.id,
-
-        // ⭐ NEW FIELD
-        to_account_id: type === "transfer" ? transferAccount.id : null,
-
-        category_id: type === "transfer" ? null : selectedCategory.id,
-
+    try {
+      await saveTransaction({
+        userId: user.id,
         type,
         title,
-        amount: parsedAmount,
+        amount,
         description,
-
         date: date.toISOString().split("T")[0],
         time: date.toTimeString().split(" ")[0],
-      },
-    ]);
-
-    if (error) {
+        accountId: selectedAccount.id,
+        categoryId: type === "transfer" ? null : selectedCategory.id,
+        toAccountId: type === "transfer" ? transferAccount.id : null,
+      });
+    } catch (error) {
       Alert.alert("Error", error.message);
       setLoading(false);
       return;
     }
 
-    /* ================= SAFE BALANCE UPDATE ================= */
-
-    const { data: sourceAccount } = await supabase
-      .from("accounts")
-      .select("balance")
-      .eq("id", selectedAccount.id)
-      .single();
-
-    const currentBalance = Number(sourceAccount.balance);
-
-    if (type === "expense") {
-
-      await supabase
-        .from("accounts")
-        .update({
-          balance: currentBalance - parsedAmount
-        })
-        .eq("id", selectedAccount.id);
-
-    }
-
-    if (type === "income") {
-
-      await supabase
-        .from("accounts")
-        .update({
-          balance: currentBalance + parsedAmount
-        })
-        .eq("id", selectedAccount.id);
-
-    }
-
-    if (type === "transfer") {
-
-      const { data: destinationAccount } = await supabase
-        .from("accounts")
-        .select("balance")
-        .eq("id", transferAccount.id)
-        .single();
-
-      await supabase
-        .from("accounts")
-        .update({
-          balance: currentBalance - parsedAmount
-        })
-        .eq("id", selectedAccount.id);
-
-      await supabase
-        .from("accounts")
-        .update({
-          balance: Number(destinationAccount.balance) + parsedAmount
-        })
-        .eq("id", transferAccount.id);
-
-    }
-
     setLoading(false);
 
     Alert.alert("Success 🎉", "Transaction added");
-
-    navigation.navigate("Main", {
-      screen: "Home",
-      params: { refreshAt: Date.now() },
-    });
+    navigation.goBack();
   };
 
   /* ================= UI ================= */

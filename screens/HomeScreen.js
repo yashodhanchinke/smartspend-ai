@@ -14,6 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import CalendarHeatmap from "../components/CalendarHeatmap";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
+import { showTransactionEntryOptions } from "../util/transactionEntry";
 
 export default function HomeScreen({ navigation, route }) {
 
@@ -64,8 +65,14 @@ export default function HomeScreen({ navigation, route }) {
   useFocusEffect(
     useCallback(() => {
       fetchDashboard();
-    }, [route?.params?.refreshAt])
+    }, [])
   );
+
+  useEffect(() => {
+    if (route?.params?.refreshAt) {
+      fetchDashboard();
+    }
+  }, [route?.params?.refreshAt]);
 
   useEffect(() => {
     let isMounted = true;
@@ -529,7 +536,7 @@ export default function HomeScreen({ navigation, route }) {
 
       <TouchableOpacity
         style={styles.fab}
-        onPress={() => navigation.navigate("AddTransaction")}
+        onPress={() => showTransactionEntryOptions(navigation)}
       >
         <Feather name="plus" size={26} color="#000" />
       </TouchableOpacity>

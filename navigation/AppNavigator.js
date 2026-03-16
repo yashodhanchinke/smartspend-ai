@@ -22,6 +22,7 @@ import GoalsScreen from "../screens/GoalsScreen";
 import LabelsScreen from "../screens/LabelsScreen";
 import LoansScreen from "../screens/LoansScreen";
 import RecurringScreen from "../screens/RecurringScreen";
+import ReceiptScanScreen from "../screens/ReceiptScanScreen";
 import TransactionsScreen from "../screens/TransactionsScreen";
 
 
@@ -77,6 +78,7 @@ export default function AppNavigator() {
             <Stack.Screen name="Weekly Summary" component={TransactionsScreen} />
             <Stack.Screen name="AddCategory" component={AddCategoryScreen} />
             <Stack.Screen name="AddAccount" component={AddAccountScreen} />
+            <Stack.Screen name="ReceiptScan" component={ReceiptScanScreen} />
 
           </>
         )}

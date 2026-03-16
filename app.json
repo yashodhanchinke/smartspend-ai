@@ -27,6 +27,13 @@
     },
     "plugins": [
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow SmartSpend AI to access your receipt photos.",
+          "cameraPermission": "Allow SmartSpend AI to use your camera for receipt scanning."
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
