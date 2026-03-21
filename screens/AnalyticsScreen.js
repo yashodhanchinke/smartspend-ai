@@ -16,9 +16,32 @@ import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 
 const chartWidth = Dimensions.get("window").width - 68;
+const ANALYTICS_INSIGHT_TYPE = "analytics_summary";
+const ANALYTICS_INSIGHT_PREFIX = `${ANALYTICS_INSIGHT_TYPE}::`;
+
+function buildAnalyticsInsightKey(signature) {
+  return `${ANALYTICS_INSIGHT_PREFIX}${signature}`;
+}
+
+function parseInsightSignature(insightType) {
+  if (!insightType?.startsWith(ANALYTICS_INSIGHT_PREFIX)) {
+    return null;
+  }
+
+  return insightType.slice(ANALYTICS_INSIGHT_PREFIX.length);
+}
 
 function formatCurrency(value) {
   return `₹${Number(value || 0).toFixed(2)}`;
+}
+
+function formatCardCurrency(value) {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
 }
 
 function getMonthKey(date) {
@@ -68,6 +91,7 @@ function getTrendColor(currentValue, predictedValue) {
 
 export default function AnalyticsScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
+  const [reportSignature, setReportSignature] = useState(null);
   const [analytics, setAnalytics] = useState({
     currentSpending: 0,
     monthlyAverage: 0,
@@ -103,6 +127,7 @@ export default function AnalyticsScreen({ navigation }) {
         amount,
         type,
         date,
+        created_at,
         category_id,
         categories(name,color,icon)
       `)
@@ -126,11 +151,18 @@ export default function AnalyticsScreen({ navigation }) {
       monthBuckets.map((bucket) => [bucket.key, bucket])
     );
     const categoryTotals = {};
+    let latestCreatedAt = null;
+    const transactionCount = transactions?.length || 0;
 
     transactions?.forEach((transaction) => {
       const txDate = new Date(transaction.date);
       const monthKey = getMonthKey(txDate);
       const amount = Number(transaction.amount || 0);
+      const createdAt = transaction.created_at || null;
+
+      if (createdAt && (!latestCreatedAt || new Date(createdAt) > new Date(latestCreatedAt))) {
+        latestCreatedAt = createdAt;
+      }
 
       if (transaction.type === "expense" && monthMap[monthKey]) {
         monthMap[monthKey].total += amount;
@@ -169,6 +201,15 @@ export default function AnalyticsScreen({ navigation }) {
       .sort((a, b) => b.total - a.total)
       .slice(0, 3);
 
+    const signature = [
+      monthBuckets[0]?.key || "none",
+      monthBuckets[monthBuckets.length - 1]?.key || "none",
+      transactionCount,
+      latestCreatedAt || "none",
+    ].join(":");
+
+    setReportSignature(signature);
+
     setAnalytics({
       currentSpending,
       monthlyAverage,
@@ -193,19 +234,84 @@ export default function AnalyticsScreen({ navigation }) {
     const generateSummary = async () => {
       if (!analytics.monthlyValues.length) return;
 
-      if (
-        !analytics.currentSpending &&
-        !analytics.monthlyAverage &&
-        !analytics.predictedSpending &&
-        !analytics.topCategories.length
-      ) {
-        setAiSummary("Add more transaction data to generate your AI report.");
-        return;
-      }
-
-      setAiLoading(true);
+      let cachedInsight = null;
+      let legacyInsight = null;
 
       try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+
+        if (!user) {
+          setAiSummary("Sign in to view your AI report.");
+          return;
+        }
+
+        const insightType = buildAnalyticsInsightKey(reportSignature || "empty");
+        const { data: cachedInsights, error: cachedInsightsError } = await supabase
+          .from("ai_insights")
+          .select("id, insight_type, message, created_at")
+          .eq("user_id", user.id)
+          .like("insight_type", `${ANALYTICS_INSIGHT_PREFIX}%`)
+          .order("created_at", { ascending: false })
+          .limit(20);
+
+        if (cachedInsightsError) {
+          throw cachedInsightsError;
+        }
+
+        cachedInsight =
+          cachedInsights?.find((item) => parseInsightSignature(item.insight_type) === reportSignature) ||
+          null;
+
+        if (
+          !analytics.currentSpending &&
+          !analytics.monthlyAverage &&
+          !analytics.predictedSpending &&
+          !analytics.topCategories.length
+        ) {
+          setAiSummary("Add more transaction data to generate your AI report.");
+          return;
+        }
+
+        if (cachedInsight?.message) {
+          setAiSummary(cachedInsight.message);
+          return;
+        }
+
+        const { data: legacyInsightRow, error: legacyInsightError } = await supabase
+          .from("ai_insights")
+          .select("id, message, created_at")
+          .eq("user_id", user.id)
+          .eq("insight_type", ANALYTICS_INSIGHT_TYPE)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (legacyInsightError) {
+          throw legacyInsightError;
+        }
+
+        legacyInsight = legacyInsightRow;
+
+        if (legacyInsight?.message && reportSignature) {
+          const { error: updateLegacyError } = await supabase
+            .from("ai_insights")
+            .update({
+              insight_type: insightType,
+              message: legacyInsight.message,
+            })
+            .eq("id", legacyInsight.id);
+
+          if (updateLegacyError) {
+            throw updateLegacyError;
+          }
+
+          setAiSummary(legacyInsight.message);
+          return;
+        }
+
+        setAiLoading(true);
         const { data, error } = await supabase.functions.invoke(
           "generate-analytics-summary",
           {
@@ -233,6 +339,18 @@ export default function AnalyticsScreen({ navigation }) {
 
         const text = data?.summary || "AI report is unavailable right now.";
 
+        const { error: insertError } = await supabase.from("ai_insights").insert([
+          {
+            user_id: user.id,
+            insight_type: insightType,
+            message: text,
+          },
+        ]);
+
+        if (insertError) {
+          throw insertError;
+        }
+
         setAiSummary(text);
       } catch (error) {
         let message = error?.message
@@ -251,14 +369,14 @@ export default function AnalyticsScreen({ navigation }) {
           }
         }
 
-        setAiSummary(message);
+        setAiSummary(cachedInsight?.message || legacyInsight?.message || message);
       } finally {
         setAiLoading(false);
       }
     };
 
     generateSummary();
-  }, [analytics]);
+  }, [analytics, reportSignature]);
 
   const maxMonthlyValue = Math.max(...analytics.monthlyValues, 0);
   const topTotal = analytics.topCategories[0]?.total || 0;
@@ -269,11 +387,20 @@ export default function AnalyticsScreen({ navigation }) {
       <ScreenHeader title="Analytics" navigation={navigation} />
 
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View style={styles.row}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.row}
+        >
           <View style={styles.cardSmall}>
             <Text style={styles.cardTitleSmall}>Current Spending</Text>
-            <Text style={[styles.amountRed, { fontSize: 20 }]}>
-              {loading ? "..." : formatCurrency(analytics.currentSpending)}
+            <Text
+              style={[styles.amountValue, styles.amountRed]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+            >
+              {loading ? "..." : formatCardCurrency(analytics.currentSpending)}
             </Text>
             <Text
               style={[
@@ -288,20 +415,30 @@ export default function AnalyticsScreen({ navigation }) {
 
           <View style={styles.cardSmall}>
             <Text style={styles.cardTitleSmall}>Monthly Average</Text>
-            <Text style={styles.amountBlue}>
-              {loading ? "..." : formatCurrency(analytics.monthlyAverage)}
+            <Text
+              style={[styles.amountValue, styles.amountBlue]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+            >
+              {loading ? "..." : formatCardCurrency(analytics.monthlyAverage)}
             </Text>
             <Text style={styles.cardSubSmall}>Last 6 months</Text>
           </View>
 
           <View style={styles.cardSmall}>
             <Text style={styles.cardTitleSmall}>Predicted</Text>
-            <Text style={styles.amountGreen}>
-              {loading ? "..." : formatCurrency(analytics.predictedSpending)}
+            <Text
+              style={[styles.amountValue, styles.amountGreen]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+            >
+              {loading ? "..." : formatCardCurrency(analytics.predictedSpending)}
             </Text>
             <Text style={styles.cardSubSmall}>Weighted forecast</Text>
           </View>
-        </View>
+        </ScrollView>
 
         <View style={styles.bigCard}>
           <Text style={styles.heading}>Top categories</Text>
@@ -460,7 +597,7 @@ export default function AnalyticsScreen({ navigation }) {
         <View style={styles.bigCard}>
           <Text style={styles.heading}>About This Analysis</Text>
           <Text style={styles.listItem}>• Based on your last 6 months of non-transfer transactions</Text>
-          <Text style={styles.listItem}>• Current spending uses this month's expense transactions only</Text>
+          <Text style={styles.listItem}>• Current spending uses this month&apos;s expense transactions only</Text>
           <Text style={styles.listItem}>• Predicted spending uses a weighted month-over-month forecast</Text>
           <Text style={styles.listItem}>• Top categories are ranked by actual total expense amount</Text>
           <Text style={styles.listItem}>• AI report depends on a valid Gemini API key and network access</Text>
@@ -476,29 +613,35 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
 
   row: {
-    flexDirection: "row",
-    justifyContent: "space-between",
     paddingHorizontal: 16,
     marginTop: 12,
+    paddingRight: 6,
   },
 
   cardSmall: {
     backgroundColor: colors.card,
-    width: "31%",
+    width: 186,
     padding: 14,
     borderRadius: 16,
-    minHeight: 110,
+    minHeight: 112,
+    marginRight: 12,
   },
 
   cardTitleSmall: {
     color: colors.text,
     fontSize: 12,
-    marginBottom: 6,
+    marginBottom: 10,
   },
 
-  amountBlue: { color: "#33aaff", fontWeight: "800", fontSize: 18 },
-  amountGreen: { color: "#79ff8a", fontWeight: "800", fontSize: 18 },
-  amountRed: { color: "#ff7474", fontWeight: "800", fontSize: 18 },
+  amountValue: {
+    fontWeight: "800",
+    fontSize: 21,
+    lineHeight: 26,
+    includeFontPadding: false,
+  },
+  amountBlue: { color: "#33aaff" },
+  amountGreen: { color: "#79ff8a" },
+  amountRed: { color: "#ff7474" },
 
   cardSubSmall: {
     color: colors.muted,

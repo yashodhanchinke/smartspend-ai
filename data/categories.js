@@ -11,7 +11,7 @@ export const EXPENSE_CATEGORIES = [
   { name: "Utilities", type: "expense", icon: "lightning-bolt", color: "#FFB703" },
   { name: "Housing", type: "expense", icon: "home-city", color: "#D55D92" },
   { name: "Groceries", type: "expense", icon: "cart", color: "#6A4C93" },
-  { name: "Others", type: "expense", icon: "dots-horizontal", color: "#8D8D8D" },
+  { name: "Other", type: "expense", icon: "dots-horizontal", color: "#8D8D8D" },
 ];
 
 export const INCOME_CATEGORIES = [
@@ -20,4 +20,5 @@ export const INCOME_CATEGORIES = [
   { name: "Investments", type: "income", icon: "chart-line", color: "#4CC9F0" },
   { name: "Savings", type: "income", icon: "piggy-bank", color: "#F15BB5" },
   { name: "Salary", type: "income", icon: "bank", color: "#00A896" },
+  { name: "Other", type: "income", icon: "dots-horizontal", color: "#8D8D8D" },
 ];

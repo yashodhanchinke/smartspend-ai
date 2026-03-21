@@ -2,6 +2,7 @@
 
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { useState } from "react";
+import ColorPickerTabs from "../components/ColorPickerTabs";
 import {
     Alert,
     ScrollView,
@@ -109,28 +110,7 @@ export default function AddCategoryScreen({ navigation }) {
 
         {/* COLORS */}
         <Text style={styles.sectionTitle}>Colors</Text>
-
-        <View style={styles.colorGrid}>
-          {COLORS.map((color) => (
-            <TouchableOpacity
-              key={color}
-              style={[
-                styles.colorCircle,
-                { backgroundColor: color },
-                selectedColor === color && styles.selectedColor,
-              ]}
-              onPress={() => setSelectedColor(color)}
-            >
-              {selectedColor === color && (
-                <MaterialCommunityIcons
-                  name="check"
-                  size={18}
-                  color="#fff"
-                />
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
+        <ColorPickerTabs palette={COLORS} selectedColor={selectedColor} onSelectColor={setSelectedColor} />
 
       </ScrollView>
 
@@ -210,25 +190,6 @@ const styles = StyleSheet.create({
     color: "#EEDDD2",
     fontSize: 16,
     marginBottom: 10,
-  },
-
-  colorGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-  },
-
-  colorCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    margin: 6,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  selectedColor: {
-    borderWidth: 2,
-    borderColor: "#fff",
   },
 
   saveBtn: {

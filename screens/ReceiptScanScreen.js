@@ -136,7 +136,7 @@ export default function ReceiptScanScreen({ navigation, route }) {
         throw new Error("Receipt scanned, but amount could not be detected.");
       }
 
-      await saveTransaction({
+      const transaction = await saveTransaction({
         userId: data.userId,
         type: parsedType,
         title: parsedTitle,
@@ -146,6 +146,19 @@ export default function ReceiptScanScreen({ navigation, route }) {
         accountId: selectedAccount.id,
         categoryId: matchedCategory?.id || null,
       });
+
+      const { error: receiptError } = await supabase.from("receipts").insert([
+        {
+          user_id: data.userId,
+          transaction_id: transaction?.id || null,
+          image_url: asset.uri || null,
+          extracted_text: data?.rawText || "",
+        },
+      ]);
+
+      if (receiptError) {
+        throw receiptError;
+      }
 
       setLoading(false);
       Alert.alert("Success", "Receipt scanned and transaction saved.");

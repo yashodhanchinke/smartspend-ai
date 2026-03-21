@@ -29,20 +29,24 @@ export async function saveTransaction({
   const txDate = date || new Date().toISOString().split("T")[0];
   const txTime = time || new Date().toTimeString().split(" ")[0];
 
-  const { error } = await supabase.from("transactions").insert([
-    {
-      user_id: userId,
-      account_id: accountId,
-      to_account_id: type === "transfer" ? toAccountId : null,
-      category_id: type === "transfer" ? null : categoryId,
-      type,
-      title: title?.trim() || "",
-      amount: parsedAmount,
-      description,
-      date: txDate,
-      time: txTime,
-    },
-  ]);
+  const { data: insertedTransaction, error } = await supabase
+    .from("transactions")
+    .insert([
+      {
+        user_id: userId,
+        account_id: accountId,
+        to_account_id: type === "transfer" ? toAccountId : null,
+        category_id: type === "transfer" ? null : categoryId,
+        type,
+        title: title?.trim() || "",
+        amount: parsedAmount,
+        description,
+        date: txDate,
+        time: txTime,
+      },
+    ])
+    .select("id")
+    .single();
 
   if (error) {
     throw error;
@@ -124,4 +128,6 @@ export async function saveTransaction({
       throw creditError;
     }
   }
+
+  return insertedTransaction;
 }

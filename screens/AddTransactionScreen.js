@@ -1,5 +1,6 @@
 // screens/AddTransactionScreen.js
 
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -12,6 +13,7 @@ import {
   View
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import ScreenHeader from "../components/ScreenHeader";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 import { saveTransaction } from "../util/saveTransaction";
@@ -144,61 +146,75 @@ export default function AddTransactionScreen({ navigation, route }) {
   /* ================= UI ================= */
 
   return (
+    <SafeAreaView style={styles.container}>
+      <ScreenHeader title="Add Transaction" />
 
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.background }}>
-
-      <ScrollView contentContainerStyle={{ padding: 20 }}>
-
-        <Text style={styles.title}>Add Transaction</Text>
-
-        {/* TYPE SWITCH */}
-
-        <View style={styles.typeRow}>
-          {["expense", "income", "transfer"].map((t) => (
-            <TouchableOpacity
-              key={t}
-              style={[styles.typeBtn, type === t && styles.typeActive]}
-              onPress={() => setType(t)}
-            >
-              <Text style={{ color: type === t ? "#000" : "#fff", fontWeight: "600" }}>
-                {t.toUpperCase()}
-              </Text>
-            </TouchableOpacity>
-          ))}
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.heroCard}>
+          <Text style={styles.heroEyebrow}>Create a new entry</Text>
+          <Text style={styles.heroTitle}>Track money clearly</Text>
+          <Text style={styles.heroSubtitle}>
+            Choose the type, fill the details, then assign the right account and category.
+          </Text>
         </View>
 
-        {/* TITLE */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Transaction Type</Text>
+          <View style={styles.typeRow}>
+            {["expense", "income", "transfer"].map((t) => (
+              <TouchableOpacity
+                key={t}
+                style={[styles.typeBtn, type === t && styles.typeActive]}
+                onPress={() => setType(t)}
+              >
+                <Text style={[styles.typeBtnText, type === t && styles.typeBtnTextActive]}>
+                  {t.charAt(0).toUpperCase() + t.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Title"
-          placeholderTextColor="#aaa"
-          value={title}
-          onChangeText={setTitle}
-        />
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Details</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Title"
+            placeholderTextColor={colors.muted}
+            value={title}
+            onChangeText={setTitle}
+          />
 
-        {/* AMOUNT */}
+          <TextInput
+            style={styles.input}
+            placeholder="Amount"
+            placeholderTextColor={colors.muted}
+            keyboardType="numeric"
+            value={amount}
+            onChangeText={setAmount}
+          />
+        </View>
 
-        <TextInput
-          style={styles.input}
-          placeholder="Amount"
-          placeholderTextColor="#aaa"
-          keyboardType="numeric"
-          value={amount}
-          onChangeText={setAmount}
-        />
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Date & Time</Text>
+          <View style={styles.dateTimeRow}>
+            <TouchableOpacity style={styles.dateTimeCard} onPress={() => setShowDate(true)}>
+              <MaterialCommunityIcons name="calendar-month-outline" size={22} color={colors.gold} />
+              <View>
+                <Text style={styles.dateTimeLabel}>Date</Text>
+                <Text style={styles.dateTimeValue}>{date.toLocaleDateString()}</Text>
+              </View>
+            </TouchableOpacity>
 
-        {/* DATE */}
-
-        <TouchableOpacity style={styles.input} onPress={() => setShowDate(true)}>
-          <Text style={{ color: "#fff" }}>{date.toLocaleDateString()}</Text>
-        </TouchableOpacity>
-
-        {/* TIME */}
-
-        <TouchableOpacity style={styles.input} onPress={() => setShowTime(true)}>
-          <Text style={{ color: "#fff" }}>{date.toLocaleTimeString()}</Text>
-        </TouchableOpacity>
+            <TouchableOpacity style={styles.dateTimeCard} onPress={() => setShowTime(true)}>
+              <MaterialCommunityIcons name="clock-time-four-outline" size={22} color={colors.gold} />
+              <View>
+                <Text style={styles.dateTimeLabel}>Time</Text>
+                <Text style={styles.dateTimeValue}>{date.toLocaleTimeString()}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
 
         {showDate && (
           <DateTimePicker
@@ -218,32 +234,36 @@ export default function AddTransactionScreen({ navigation, route }) {
           />
         )}
 
-        {/* ACCOUNT */}
-
-        <Text style={styles.section}>Select Account</Text>
-
-        <View style={styles.wrap}>
-          {accounts.map((acc) => (
-            <TouchableOpacity
-              key={acc.id}
-              style={[
-                styles.box,
-                selectedAccount?.id === acc.id && styles.activeBox
-              ]}
-              onPress={() => setSelectedAccount(acc)}
-            >
-              <Text style={{ color: "#fff" }}>{acc.name}</Text>
-              <Text style={{ color: "#ccc" }}>₹{acc.balance}</Text>
-            </TouchableOpacity>
-          ))}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Select Account</Text>
+          <View style={styles.wrap}>
+            {accounts.map((acc) => (
+              <TouchableOpacity
+                key={acc.id}
+                style={[
+                  styles.selectionCard,
+                  selectedAccount?.id === acc.id && styles.activeSelectionCard
+                ]}
+                onPress={() => setSelectedAccount(acc)}
+              >
+                <View style={styles.accountTopRow}>
+                  <View style={styles.accountIconWrap}>
+                    <MaterialCommunityIcons name="wallet-outline" size={18} color={colors.gold} />
+                  </View>
+                  {selectedAccount?.id === acc.id ? (
+                    <MaterialCommunityIcons name="check-circle" size={20} color={colors.gold} />
+                  ) : null}
+                </View>
+                <Text style={styles.selectionTitle}>{acc.name}</Text>
+                <Text style={styles.selectionSubtitle}>₹{acc.balance}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
-        {/* TRANSFER */}
-
         {type === "transfer" && (
-          <>
-            <Text style={styles.section}>Transfer To</Text>
-
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Transfer To</Text>
             <View style={styles.wrap}>
               {accounts
                 .filter((a) => a.id !== selectedAccount?.id)
@@ -251,65 +271,261 @@ export default function AddTransactionScreen({ navigation, route }) {
                   <TouchableOpacity
                     key={acc.id}
                     style={[
-                      styles.box,
-                      transferAccount?.id === acc.id && styles.activeBox
+                      styles.selectionCard,
+                      transferAccount?.id === acc.id && styles.activeSelectionCard
                     ]}
                     onPress={() => setTransferAccount(acc)}
                   >
-                    <Text style={{ color: "#fff" }}>{acc.name}</Text>
+                    <View style={styles.accountTopRow}>
+                      <View style={styles.accountIconWrap}>
+                        <MaterialCommunityIcons name="bank-transfer" size={18} color={colors.gold} />
+                      </View>
+                      {transferAccount?.id === acc.id ? (
+                        <MaterialCommunityIcons name="check-circle" size={20} color={colors.gold} />
+                      ) : null}
+                    </View>
+                    <Text style={styles.selectionTitle}>{acc.name}</Text>
+                    <Text style={styles.selectionSubtitle}>Destination account</Text>
                   </TouchableOpacity>
                 ))}
             </View>
-          </>
+          </View>
         )}
 
-        {/* CATEGORY */}
-
         {type !== "transfer" && (
-          <>
-            <Text style={styles.section}>Select Category</Text>
-
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Select Category</Text>
             <View style={styles.wrap}>
               {categories.map((cat) => (
                 <TouchableOpacity
                   key={cat.id}
                   style={[
-                    styles.box,
-                    selectedCategory?.id === cat.id && styles.activeBox
+                    styles.categoryChip,
+                    selectedCategory?.id === cat.id && styles.activeCategoryChip
                   ]}
                   onPress={() => setSelectedCategory(cat)}
                 >
-                  <Text style={{ color: "#fff" }}>{cat.name}</Text>
+                  <View style={styles.categoryContent}>
+                    <MaterialCommunityIcons
+                      name={cat.icon || "tag"}
+                      size={18}
+                      color={cat.color || colors.gold}
+                    />
+                    <Text style={styles.categoryText}>{cat.name}</Text>
+                  </View>
+                  {selectedCategory?.id === cat.id ? (
+                    <MaterialCommunityIcons name="check-circle" size={18} color={colors.gold} />
+                  ) : null}
                 </TouchableOpacity>
               ))}
             </View>
-          </>
+          </View>
         )}
-
-        {/* SAVE */}
 
         <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
           <Text style={styles.saveText}>
             {loading ? "Saving..." : "Add"}
           </Text>
         </TouchableOpacity>
-
       </ScrollView>
-
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  title: { color: colors.gold, fontSize: 24, fontWeight: "700", marginBottom: 20 },
-  typeRow: { flexDirection: "row", gap: 10, marginBottom: 20 },
-  typeBtn: { flex: 1, padding: 12, borderRadius: 12, backgroundColor: "#333", alignItems: "center" },
-  typeActive: { backgroundColor: colors.gold },
-  input: { backgroundColor: colors.card, padding: 14, borderRadius: 12, marginBottom: 14, color: "#fff" },
-  section: { color: "#fff", marginTop: 14, marginBottom: 8, fontWeight: "600" },
-  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  box: { backgroundColor: colors.card, padding: 12, borderRadius: 12, marginBottom: 10 },
-  activeBox: { borderWidth: 2, borderColor: colors.gold },
-  saveBtn: { backgroundColor: colors.gold, padding: 16, borderRadius: 14, marginTop: 30 },
-  saveText: { textAlign: "center", fontWeight: "700", color: "#000" },
+  container: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  content: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+  heroCard: {
+    backgroundColor: "#33211d",
+    borderRadius: 22,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#4f3831",
+  },
+  heroEyebrow: {
+    color: colors.gold,
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
+  heroTitle: {
+    color: colors.text,
+    fontSize: 24,
+    fontWeight: "800",
+    marginBottom: 6,
+  },
+  heroSubtitle: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  sectionCard: {
+    backgroundColor: "#33211d",
+    borderRadius: 22,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#4f3831",
+  },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 12,
+  },
+  typeRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  typeBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 16,
+    backgroundColor: "#4a342e",
+    alignItems: "center",
+  },
+  typeActive: {
+    backgroundColor: colors.gold,
+  },
+  typeBtnText: {
+    color: colors.text,
+    fontWeight: "700",
+    fontSize: 14,
+  },
+  typeBtnTextActive: {
+    color: "#231512",
+  },
+  input: {
+    backgroundColor: "#412d28",
+    borderRadius: 16,
+    marginBottom: 12,
+    color: colors.text,
+    paddingHorizontal: 16,
+    paddingVertical: 15,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: "#5b433c",
+  },
+  dateTimeRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  dateTimeCard: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "#412d28",
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#5b433c",
+  },
+  dateTimeLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  dateTimeValue: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  wrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  selectionCard: {
+    width: "48%",
+    backgroundColor: "#412d28",
+    padding: 14,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#5b433c",
+  },
+  activeSelectionCard: {
+    borderColor: colors.gold,
+    backgroundColor: "#4a312a",
+  },
+  accountTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  accountIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#593f37",
+  },
+  selectionTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  selectionSubtitle: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  categoryChip: {
+    minWidth: "47%",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#412d28",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#5b433c",
+  },
+  activeCategoryChip: {
+    borderColor: colors.gold,
+    backgroundColor: "#4a312a",
+  },
+  categoryContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    marginRight: 8,
+  },
+  categoryText: {
+    color: colors.text,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  saveBtn: {
+    backgroundColor: colors.gold,
+    padding: 18,
+    borderRadius: 18,
+    marginTop: 8,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  saveText: {
+    textAlign: "center",
+    fontWeight: "800",
+    color: "#231512",
+    fontSize: 16,
+  },
 });

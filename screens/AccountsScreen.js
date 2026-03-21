@@ -13,7 +13,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../lib/supabase";
 import { getAccountColor, getAccountIconName } from "../util/accountAppearance";
-import { showTransactionEntryOptions } from "../util/transactionEntry";
 
 const { width } = Dimensions.get("window");
 
@@ -358,9 +357,7 @@ export default function AccountsScreen({ navigation, route }) {
 
       <TouchableOpacity
         style={styles.fab}
-        onPress={() =>
-          showTransactionEntryOptions(navigation, { accountId: selectedAccount?.id })
-        }
+        onPress={() => navigation.navigate("AddAccount")}
       >
         <Ionicons name="add" size={26} color="#20120d" />
       </TouchableOpacity>
