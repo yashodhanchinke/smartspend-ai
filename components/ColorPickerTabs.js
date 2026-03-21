@@ -1,45 +1,27 @@
 import Feather from "@expo/vector-icons/Feather";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
+import ColorPicker from "react-native-wheel-color-picker";
 import colors from "../theme/colors";
 
-function getPrimaryColors(palette) {
-  return palette.slice(0, Math.ceil(palette.length / 2));
-}
-
-function getAccentColors(palette) {
-  return palette.slice(Math.ceil(palette.length / 2));
-}
+const ACCENT_COLORS = [
+  "#FF8A80", "#FF5252", "#FF1744", "#D50000",
+  "#FF80AB", "#FF4081", "#F50057", "#C51162",
+  "#EA80FC", "#E040FB", "#D500F9", "#AA00FF",
+  "#B388FF", "#7C4DFF", "#651FFF", "#6200EA",
+  "#8C9EFF", "#536DFE", "#3D5AFE", "#304FFE",
+  "#82B1FF", "#448AFF", "#2979FF", "#2962FF",
+  "#84FFFF", "#18FFFF", "#00E5FF",
+];
 
 export default function ColorPickerTabs({ palette, selectedColor, onSelectColor }) {
-  const primaryColors = useMemo(() => getPrimaryColors(palette), [palette]);
-  const accentColors = useMemo(() => getAccentColors(palette), [palette]);
-  const [activeTab, setActiveTab] = useState(
-    accentColors.includes(selectedColor) ? "accent" : "primary"
-  );
+  const [activeTab, setActiveTab] = useState("primary");
+  const [wheelColor, setWheelColor] = useState(selectedColor);
 
   useEffect(() => {
-    if (activeTab === "wheel") {
-      return;
-    }
-
-    if (primaryColors.includes(selectedColor)) {
-      setActiveTab("primary");
-      return;
-    }
-
-    if (accentColors.includes(selectedColor)) {
-      setActiveTab("accent");
-    }
-  }, [selectedColor, primaryColors, accentColors, activeTab]);
-
-  const visibleColors =
-    activeTab === "primary"
-      ? primaryColors
-      : activeTab === "accent"
-        ? accentColors
-        : palette;
+    setWheelColor(selectedColor);
+  }, [selectedColor]);
 
   return (
     <>
@@ -67,17 +49,33 @@ export default function ColorPickerTabs({ palette, selectedColor, onSelectColor 
         })}
       </View>
 
-      <View style={styles.palette}>
-        {visibleColors.map((colorValue) => (
-          <Pressable
-            key={colorValue}
-            style={[styles.colorSwatch, { backgroundColor: colorValue }]}
-            onPress={() => onSelectColor(colorValue)}
-          >
-            {selectedColor === colorValue ? <Feather name="check" size={24} color="#fff" /> : null}
-          </Pressable>
-        ))}
-      </View>
+      {activeTab === "wheel" ? (
+        <View style={styles.wheelContainer}>
+          <ColorPicker
+            color={wheelColor}
+            onColorChangeComplete={(color) => {
+              setWheelColor(color);
+              onSelectColor(color);
+            }}
+            thumbSize={30}
+            sliderSize={30}
+            noSnap={true}
+            row={false}
+          />
+        </View>
+      ) : (
+        <View style={styles.palette}>
+          {(activeTab === "primary" ? palette : ACCENT_COLORS).map((colorValue) => (
+            <Pressable
+              key={colorValue}
+              style={[styles.colorSwatch, { backgroundColor: colorValue }]}
+              onPress={() => onSelectColor(colorValue)}
+            >
+              {selectedColor === colorValue ? <Feather name="check" size={24} color="#fff" /> : null}
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       <View style={styles.colorValuePill}>
         <Text style={styles.colorValueText}>{selectedColor.replace("#", "0x")}</Text>
@@ -88,6 +86,12 @@ export default function ColorPickerTabs({ palette, selectedColor, onSelectColor 
 }
 
 const styles = StyleSheet.create({
+  wheelContainer: {
+    height: 300,
+    width: "100%",
+    paddingHorizontal: 20,
+    marginVertical: 10,
+  },
   modeTabs: {
     flexDirection: "row",
     alignItems: "center",
