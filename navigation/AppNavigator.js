@@ -25,6 +25,7 @@ import AddTransactionScreen from "../screens/AddTransactionScreen";
 import AnalyticsScreen from "../screens/AnalyticsScreen";
 import BudgetsScreen from "../screens/BudgetsScreen";
 import CategoriesScreen from "../screens/CategoriesScreen";
+import CalendarHeatmapScreen from "../screens/CalendarHeatmapScreen";
 import CategoryDetailsScreen from "../screens/CategoryDetailsScreen";
 import GoalsScreen from "../screens/GoalsScreen";
 import LabelsScreen from "../screens/LabelsScreen";
@@ -142,6 +143,7 @@ export default function AppNavigator() {
 
             <Stack.Screen name="AddTransaction" component={AddTransactionScreen} />
             <Stack.Screen name="Categories" component={CategoriesScreen} />
+            <Stack.Screen name="Calendar Heatmap" component={CalendarHeatmapScreen} />
             <Stack.Screen name="CategoryDetails" component={CategoryDetailsScreen} />
 
             <Stack.Screen name="Budgets" component={BudgetsScreen} />

@@ -16,9 +16,53 @@ import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 import { showTransactionEntryOptions } from "../util/transactionEntry";
 
+const parseStoredDate = (value) => {
+  if (!value) return new Date();
+
+  const [year, month, day] = String(value).split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+};
+
+const formatDateOnly = (value) => {
+  const date = parseStoredDate(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const getMondayOfWeek = (value = new Date()) => {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  return date;
+};
+
+const isSameDate = (left, right) =>
+  left.getFullYear() === right.getFullYear() &&
+  left.getMonth() === right.getMonth() &&
+  left.getDate() === right.getDate();
+
 export default function HomeScreen({ navigation, route }) {
 
   const [transactions, setTransactions] = useState([]);
+  const [weeklySummary, setWeeklySummary] = useState({
+    count: 0,
+    highestDay: "None",
+    highestSpending: 0,
+    net: 0,
+    bars: [
+      { label: "Mon", total: 0 },
+      { label: "Tue", total: 0 },
+      { label: "Wed", total: 0 },
+      { label: "Thu", total: 0 },
+      { label: "Fri", total: 0 },
+      { label: "Sat", total: 0 },
+      { label: "Sun", total: 0 },
+    ],
+  });
   const [totalBalance, setTotalBalance] = useState(0);
   const [income, setIncome] = useState(0);
   const [expense, setExpense] = useState(0);
@@ -182,6 +226,95 @@ export default function HomeScreen({ navigation, route }) {
       .limit(5);
 
     setTransactions(tx || []);
+
+    const { data: weeklySourceTransactions } = await supabase
+      .from("transactions")
+      .select("amount,type,date")
+      .eq("user_id", user.id)
+      .order("date", { ascending: false })
+      .limit(180);
+
+    const latestTransactionDate = weeklySourceTransactions?.length
+      ? parseStoredDate(weeklySourceTransactions[0].date)
+      : new Date();
+
+    const startOfWeek = getMondayOfWeek(latestTransactionDate);
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+    const weekTransactions = (weeklySourceTransactions || []).filter((transaction) => {
+      const txDate = parseStoredDate(transaction.date);
+      return txDate >= startOfWeek && txDate <= endOfWeek;
+    });
+
+    const daySpendMap = {
+      1: 0,
+      2: 0,
+      3: 0,
+      4: 0,
+      5: 0,
+      6: 0,
+      0: 0,
+    };
+
+    const currentWeekSummary = (weekTransactions || []).reduce(
+      (summary, transaction) => {
+        const amount = Number(transaction.amount || 0);
+        const transactionDate = parseStoredDate(transaction.date);
+        const weekDay = transactionDate.getDay();
+
+        if (transaction.type === "income") {
+          summary.net += amount;
+        } else if (transaction.type === "expense") {
+          summary.net -= amount;
+        }
+
+        if (transaction.type !== "transfer") {
+          daySpendMap[weekDay] += Math.abs(amount);
+        }
+
+        summary.count += 1;
+        return summary;
+      },
+      { count: 0, net: 0 }
+    );
+
+    const orderedDays = [
+      { label: "Mon", fullLabel: "Monday", key: 1 },
+      { label: "Tue", fullLabel: "Tuesday", key: 2 },
+      { label: "Wed", fullLabel: "Wednesday", key: 3 },
+      { label: "Thu", fullLabel: "Thursday", key: 4 },
+      { label: "Fri", fullLabel: "Friday", key: 5 },
+      { label: "Sat", fullLabel: "Saturday", key: 6 },
+      { label: "Sun", fullLabel: "Sunday", key: 0 },
+    ];
+
+    const bars = orderedDays.map((day) => ({
+      label: day.label,
+      fullLabel: day.fullLabel,
+      total: daySpendMap[day.key] || 0,
+    }));
+
+    const highestBar = bars.reduce(
+      (highest, current) => (current.total > highest.total ? current : highest),
+      bars[0] || { label: "None", total: 0 }
+    );
+
+    setWeeklySummary({
+      ...currentWeekSummary,
+      bars,
+      highestDay: highestBar?.total ? highestBar.fullLabel : "None",
+      highestSpending: highestBar?.total || 0,
+      weekLabel: isSameDate(startOfWeek, getMondayOfWeek(new Date()))
+        ? "This Week"
+        : `${startOfWeek.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+          })} - ${endOfWeek.toLocaleDateString("en-US", {
+            month: "short",
+            day: "numeric",
+          })}`,
+    });
 
     /* MONTH SUMMARY */
 
@@ -458,8 +591,8 @@ export default function HomeScreen({ navigation, route }) {
             icon="calendar"
             title="Weekly Summary"
             navigation={navigation}
-            bodyIcon="calendar"
-            bodyText="No transactions this week"
+            variant="weeklySummary"
+            weeklySummary={weeklySummary}
             compactTitle
           />
 
@@ -467,7 +600,10 @@ export default function HomeScreen({ navigation, route }) {
 
         {/* HEATMAP */}
 
-        <CalendarHeatmap refreshKey={refreshKey} />
+        <CalendarHeatmap
+          refreshKey={refreshKey}
+          onPress={() => navigation.navigate("Calendar Heatmap")}
+        />
 
         {/* RECENT TRANSACTIONS */}
 
@@ -558,6 +694,7 @@ function SectionCard({
   topCategories,
   title,
   variant,
+  weeklySummary,
 }) {
 
   const renderBody = () => {
@@ -605,6 +742,63 @@ function SectionCard({
       );
     }
 
+    if (variant === "weeklySummary") {
+      const highestSpending = Number(weeklySummary?.highestSpending || 0);
+      const bars = weeklySummary?.bars || [];
+      const maxBarValue = Math.max(...bars.map((bar) => bar.total), 0);
+
+      return (
+        <View style={styles.weeklyCardBody}>
+          <View style={styles.weeklySummaryMetaRow}>
+            <View>
+              <Text style={styles.sectionSmallLabel}>
+                {weeklySummary?.weekLabel || "This Week"}
+              </Text>
+              <Text style={styles.weeklyMetaAmount}>
+                ₹{highestSpending.toFixed(2)}
+              </Text>
+            </View>
+
+            <View style={styles.weeklyMetaRight}>
+              <Text style={styles.sectionSmallLabel}>Highest Spending</Text>
+              <Text style={styles.weeklyMetaDay} numberOfLines={1}>
+                {weeklySummary?.highestDay || "None"}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.weeklyBarsWrap}>
+            {bars.map((bar) => {
+              const height = maxBarValue ? Math.max(6, (bar.total / maxBarValue) * 52) : 6;
+              const isActive = bar.total === maxBarValue && maxBarValue > 0;
+
+              return (
+                <View key={bar.label} style={styles.weeklyBarItem}>
+                  <View style={styles.weeklyBarTrack}>
+                    <View
+                      style={[
+                        styles.weeklyBar,
+                        { height },
+                        isActive && styles.weeklyBarActive,
+                      ]}
+                    />
+                  </View>
+                  <Text
+                    style={[
+                      styles.weeklyBarLabel,
+                      isActive && styles.weeklyBarLabelActive,
+                    ]}
+                  >
+                    {bar.label}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.sectionBody}>
         <Feather name={bodyIcon} size={46} color="#cbb8b1" />
@@ -616,7 +810,11 @@ function SectionCard({
   return (
     <TouchableOpacity
       style={styles.sectionCard}
-      onPress={() => navigation.navigate(title)}
+      onPress={() =>
+        title === "Weekly Summary"
+          ? navigation.navigate(title, { initialTab: "Weekly" })
+          : navigation.navigate(title)
+      }
     >
 
       <View style={styles.sectionHeader}>
@@ -774,7 +972,7 @@ const styles = StyleSheet.create({
   sectionCard: {
     backgroundColor: colors.card,
     width: "48%",
-    minHeight: 168,
+    height: 190,
     borderRadius: 18,
     marginBottom: 14,
     overflow: "hidden",
@@ -836,8 +1034,8 @@ const styles = StyleSheet.create({
 
   sectionSmallLabel: {
     color: "#d8c8c0",
-    fontSize: 11,
-    marginBottom: 8,
+    fontSize: 9,
+    marginBottom: 4,
   },
 
   sectionAmount: {
@@ -853,10 +1051,94 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 
+  sectionTrendNeutral: {
+    color: "#d8c8c0",
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 8,
+    lineHeight: 16,
+  },
+
+  weeklyCardBody: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 10,
+  },
+
+  weeklySummaryMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 8,
+  },
+
+  weeklyMetaRight: {
+    alignItems: "flex-end",
+    marginLeft: 8,
+    flexShrink: 1,
+    maxWidth: "48%",
+  },
+
+  weeklyMetaAmount: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  weeklyMetaDay: {
+    color: colors.gold,
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+
+  weeklyBarsWrap: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    minHeight: 78,
+    paddingBottom: 2,
+  },
+
+  weeklyBarItem: {
+    alignItems: "center",
+    flex: 1,
+  },
+
+  weeklyBarTrack: {
+    width: 16,
+    height: 56,
+    justifyContent: "flex-end",
+    alignItems: "center",
+  },
+
+  weeklyBar: {
+    width: 16,
+    borderRadius: 6,
+    backgroundColor: "#7b5d52",
+  },
+
+  weeklyBarActive: {
+    backgroundColor: "#ffb497",
+  },
+
+  weeklyBarLabel: {
+    color: "#cfb9af",
+    fontSize: 7,
+    fontWeight: "700",
+    marginTop: 4,
+  },
+
+  weeklyBarLabelActive: {
+    color: colors.gold,
+  },
+
   sectionCategoriesBody: {
     flex: 1,
     paddingHorizontal: 14,
-    paddingVertical: 16,
+    paddingVertical: 14,
   },
 
   sectionCategoriesCountRow: {
@@ -867,13 +1149,13 @@ const styles = StyleSheet.create({
 
   sectionCountNumber: {
     color: colors.text,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "800",
   },
 
   sectionCount: {
     color: colors.text,
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "700",
     marginLeft: 6,
     marginBottom: 1,
@@ -890,7 +1172,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 8,
+    marginBottom: 6,
   },
 
   categoryItemLeft: {
@@ -902,7 +1184,7 @@ const styles = StyleSheet.create({
 
   categoryItemName: {
     color: colors.text,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
     marginLeft: 8,
     flex: 1,
@@ -910,7 +1192,7 @@ const styles = StyleSheet.create({
 
   categoryItemAmount: {
     color: "#d8c8c0",
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "700",
   },
 
