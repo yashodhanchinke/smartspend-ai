@@ -7,6 +7,7 @@ import FloatingButton from "../components/FloatingButton";
 import ScreenHeader from "../components/ScreenHeader";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
+import { getDuePendingLoans } from "../util/loanSettlement";
 
 function formatCurrency(value) {
   return `₹${Number(value || 0).toFixed(2)}`;
@@ -14,16 +15,27 @@ function formatCurrency(value) {
 
 export default function LoansScreen({ navigation }) {
   const [loans, setLoans] = useState([]);
+  const [dueLoanIds, setDueLoanIds] = useState([]);
 
   const fetchLoans = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return setLoans([]);
-    const { data } = await supabase
-      .from("loans")
-      .select("id,name,amount,type,start_date,end_date,description")
-      .eq("user_id", user.id)
-      .order("start_date", { ascending: false });
+    if (!user) {
+      setLoans([]);
+      setDueLoanIds([]);
+      return;
+    }
+
+    const [{ data }, dueLoans] = await Promise.all([
+      supabase
+        .from("loans")
+        .select("id,name,amount,type,start_date,end_date,description,status,settled_at")
+        .eq("user_id", user.id)
+        .order("start_date", { ascending: false }),
+      getDuePendingLoans(user.id),
+    ]);
+
     setLoans(data || []);
+    setDueLoanIds((dueLoans || []).map((loan) => loan.id));
   }, []);
 
   useFocusEffect(useCallback(() => { fetchLoans(); }, [fetchLoans]));
@@ -47,8 +59,21 @@ export default function LoansScreen({ navigation }) {
             >
               <View style={styles.row}>
                 <Text style={styles.cardTitle}>{loan.name || "Loan"}</Text>
-                <View style={[styles.typePill, loan.type === "borrowing" && styles.typePillBorrowing]}>
-                  <Text style={styles.typeText}>{loan.type === "borrowing" ? "Borrowing" : "Lending"}</Text>
+                <View style={styles.pillStack}>
+                  <View style={[styles.typePill, loan.type === "borrowing" && styles.typePillBorrowing]}>
+                    <Text style={styles.typeText}>{loan.type === "borrowing" ? "Borrowing" : "Lending"}</Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.statusPill,
+                      dueLoanIds.includes(loan.id) && styles.statusPillDue,
+                      loan.status === "settled" && styles.statusPillSettled,
+                    ]}
+                  >
+                    <Text style={styles.statusText}>
+                      {loan.status === "settled" ? "Settled" : dueLoanIds.includes(loan.id) ? "Due now" : "Pending"}
+                    </Text>
+                  </View>
                 </View>
               </View>
               <Text style={styles.cardAmount}>{formatCurrency(loan.amount)}</Text>
@@ -72,9 +97,14 @@ const styles = StyleSheet.create({
   card: { backgroundColor: colors.card, borderRadius: 20, padding: 18, marginBottom: 14 },
   row: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
   cardTitle: { color: colors.text, fontSize: 18, fontWeight: "700", flex: 1, marginRight: 10 },
+  pillStack: { alignItems: "flex-end", gap: 8 },
   typePill: { backgroundColor: "#6b681c", borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
   typePillBorrowing: { backgroundColor: "#7a4d37" },
   typeText: { color: colors.text, fontSize: 12, fontWeight: "700" },
+  statusPill: { backgroundColor: "#4c342d", borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7 },
+  statusPillDue: { backgroundColor: "#8c5f2f" },
+  statusPillSettled: { backgroundColor: "#255236" },
+  statusText: { color: colors.text, fontSize: 12, fontWeight: "700" },
   cardAmount: { color: "#ffb49a", fontSize: 22, fontWeight: "800", marginBottom: 8 },
   cardDescription: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 8 },
   cardMeta: { color: colors.muted, fontSize: 13, fontWeight: "600" },

@@ -1,8 +1,9 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Platform,
   ScrollView,
   StyleSheet,
@@ -10,11 +11,13 @@ import {
   TouchableOpacity,
   View
 } from "react-native";
+import LoanSettlementModal from "../components/LoanSettlementModal";
 import { SafeAreaView } from "react-native-safe-area-context";
 import CalendarHeatmap from "../components/CalendarHeatmap";
 import TransactionListItem from "../components/TransactionListItem";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
+import { getDuePendingLoans, settleLoan } from "../util/loanSettlement";
 import { showTransactionEntryOptions } from "../util/transactionEntry";
 
 const parseStoredDate = (value) => {
@@ -22,14 +25,6 @@ const parseStoredDate = (value) => {
 
   const [year, month, day] = String(value).split("-").map(Number);
   return new Date(year, (month || 1) - 1, day || 1);
-};
-
-const formatDateOnly = (value) => {
-  const date = parseStoredDate(value);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 };
 
 const getMondayOfWeek = (value = new Date()) => {
@@ -74,6 +69,10 @@ export default function HomeScreen({ navigation, route }) {
   const [showAmounts, setShowAmounts] = useState(true);
   const [lastMonthIncome, setLastMonthIncome] = useState(0);
   const [lastMonthExpense, setLastMonthExpense] = useState(0);
+  const [dueLoanPrompt, setDueLoanPrompt] = useState(null);
+  const [isSettlingLoan, setIsSettlingLoan] = useState(false);
+  const dismissedLoanIdsRef = useRef(new Set());
+  const fetchDashboardRef = useRef(() => {});
 
   const getProfileSubtitle = () => {
     const indiaHour = Number(
@@ -105,20 +104,6 @@ export default function HomeScreen({ navigation, route }) {
     return `Night planning, ${firstName}. One last look at your budget.`;
   };
 
-  /* REFRESH SCREEN */
-
-  useFocusEffect(
-    useCallback(() => {
-      fetchDashboard();
-    }, [])
-  );
-
-  useEffect(() => {
-    if (route?.params?.refreshAt) {
-      fetchDashboard();
-    }
-  }, [route?.params?.refreshAt]);
-
   useEffect(() => {
     let isMounted = true;
     let channel;
@@ -141,7 +126,7 @@ export default function HomeScreen({ navigation, route }) {
             filter: `user_id=eq.${user.id}`,
           },
           () => {
-            fetchDashboard();
+            fetchDashboardRef.current();
           }
         )
         .on(
@@ -153,7 +138,7 @@ export default function HomeScreen({ navigation, route }) {
             filter: `user_id=eq.${user.id}`,
           },
           () => {
-            fetchDashboard();
+            fetchDashboardRef.current();
           }
         )
         .on(
@@ -165,7 +150,19 @@ export default function HomeScreen({ navigation, route }) {
             filter: `user_id=eq.${user.id}`,
           },
           () => {
-            fetchDashboard();
+            fetchDashboardRef.current();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "loans",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchDashboardRef.current();
           }
         )
         .subscribe();
@@ -182,11 +179,26 @@ export default function HomeScreen({ navigation, route }) {
     };
   }, []);
 
-  const fetchDashboard = async () => {
+  const refreshDueLoanPrompt = useCallback(async (userId) => {
+    const dueLoans = await getDuePendingLoans(userId);
+    const nextDueLoan = dueLoans.find(
+      (loan) => !dismissedLoanIdsRef.current.has(loan.id)
+    );
+
+    setDueLoanPrompt(nextDueLoan || null);
+  }, []);
+
+  const fetchDashboard = useCallback(async () => {
 
     const {
       data: { user },
     } = await supabase.auth.getUser();
+
+    if (!user) {
+      return;
+    }
+
+    await refreshDueLoanPrompt(user.id);
 
     /* PROFILE */
 
@@ -412,7 +424,58 @@ export default function HomeScreen({ navigation, route }) {
         .slice(0, 3)
     );
     setRefreshKey((current) => current + 1);
-  };
+  }, [refreshDueLoanPrompt]);
+
+  useEffect(() => {
+    fetchDashboardRef.current = fetchDashboard;
+  }, [fetchDashboard]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchDashboard();
+    }, [fetchDashboard])
+  );
+
+  useEffect(() => {
+    if (route?.params?.refreshAt) {
+      fetchDashboard();
+    }
+  }, [fetchDashboard, route?.params?.refreshAt]);
+
+  const handleCloseDueLoanPrompt = useCallback(() => {
+    if (dueLoanPrompt?.id) {
+      dismissedLoanIdsRef.current.add(dueLoanPrompt.id);
+    }
+
+    setDueLoanPrompt(null);
+  }, [dueLoanPrompt?.id]);
+
+  const handleConfirmDueLoan = useCallback(async () => {
+    if (!dueLoanPrompt?.id || isSettlingLoan) {
+      return;
+    }
+
+    setIsSettlingLoan(true);
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        throw new Error("You must be signed in.");
+      }
+
+      dismissedLoanIdsRef.current.delete(dueLoanPrompt.id);
+      await settleLoan({ loan: dueLoanPrompt, userId: user.id });
+      setDueLoanPrompt(null);
+      await fetchDashboard();
+    } catch (error) {
+      Alert.alert("Loan settlement failed", error.message || "Could not settle this loan right now.");
+    } finally {
+      setIsSettlingLoan(false);
+    }
+  }, [dueLoanPrompt, fetchDashboard, isSettlingLoan]);
 
   const formatAmount = (value) => {
     if (!showAmounts) return "₹******";
@@ -658,6 +721,14 @@ export default function HomeScreen({ navigation, route }) {
       >
         <Feather name="plus" size={26} color="#000" />
       </TouchableOpacity>
+
+      <LoanSettlementModal
+        visible={Boolean(dueLoanPrompt)}
+        loan={dueLoanPrompt}
+        loading={isSettlingLoan}
+        onClose={handleCloseDueLoanPrompt}
+        onConfirm={handleConfirmDueLoan}
+      />
 
     </SafeAreaView>
   );

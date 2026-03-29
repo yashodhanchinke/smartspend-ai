@@ -121,8 +121,14 @@ CREATE TABLE public.loans (
   start_date date,
   end_date date,
   description text,
+  status text DEFAULT 'pending'::text,
+  settled_at timestamp without time zone,
+  settlement_transaction_id uuid,
+  settlement_account_id uuid,
   CONSTRAINT loans_pkey PRIMARY KEY (id),
-  CONSTRAINT loans_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT loans_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT loans_settlement_transaction_id_fkey FOREIGN KEY (settlement_transaction_id) REFERENCES public.transactions(id),
+  CONSTRAINT loans_settlement_account_id_fkey FOREIGN KEY (settlement_account_id) REFERENCES public.accounts(id)
 );
 CREATE TABLE public.profiles (
   id uuid NOT NULL,

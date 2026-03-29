@@ -39,11 +39,21 @@ export default function AddLoanScreen({ navigation, route }) {
   const saveLoan = async () => {
     if (!name.trim()) return Alert.alert("Error", "Enter loan name");
     if (!amount.trim() || Number(amount) <= 0) return Alert.alert("Error", "Enter a valid amount");
+    if (endDate < startDate) return Alert.alert("Error", "End date should be after the start date.");
     setSaving(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("You must be signed in.");
-      const payload = { user_id: user.id, name: name.trim(), amount: Number(amount), type: loanType === "lend" ? "lending" : "borrowing", start_date: startDate.toISOString().split("T")[0], end_date: endDate.toISOString().split("T")[0], description: description.trim() };
+      const payload = {
+        user_id: user.id,
+        name: name.trim(),
+        amount: Number(amount),
+        type: loanType === "lend" ? "lending" : "borrowing",
+        start_date: startDate.toISOString().split("T")[0],
+        end_date: endDate.toISOString().split("T")[0],
+        description: description.trim(),
+        status: loan?.status || "pending",
+      };
       const { error } = isEditMode
         ? await supabase.from("loans").update(payload).eq("id", loan.id).eq("user_id", user.id)
         : await supabase.from("loans").insert([payload]);
@@ -81,6 +91,12 @@ export default function AddLoanScreen({ navigation, route }) {
             <View><Text style={styles.dateLabel}>End date</Text><Text style={styles.dateValue}>{formatDate(endDate)}</Text></View>
           </Pressable>
         </View>
+        <View style={styles.noticeCard}>
+          <Feather name="info" size={18} color={colors.gold} />
+          <Text style={styles.noticeText}>
+            Lending and borrowing stay pending until the end date. The amount will affect your main account only after you confirm the popup.
+          </Text>
+        </View>
       </ScrollView>
       <Pressable style={styles.saveButton} onPress={saveLoan} disabled={saving}>
         <Feather name="save" size={24} color="#2f1814" />
@@ -105,6 +121,18 @@ const styles = StyleSheet.create({
   dateCard: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12 },
   dateLabel: { color: colors.text, fontSize: 18, fontWeight: "700" },
   dateValue: { color: colors.muted, fontSize: 16, marginTop: 4, fontWeight: "700" },
+  noticeCard: {
+    marginTop: 20,
+    borderRadius: 20,
+    padding: 16,
+    backgroundColor: "#2d1b16",
+    borderWidth: 1,
+    borderColor: "#4a332d",
+    flexDirection: "row",
+    gap: 12,
+    alignItems: "flex-start",
+  },
+  noticeText: { color: colors.muted, fontSize: 14, lineHeight: 22, flex: 1, fontWeight: "600" },
   saveButton: { position: "absolute", left: 24, right: 24, bottom: 22, height: 70, borderRadius: 35, backgroundColor: "#ffb49a", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 12 },
   saveButtonText: { color: "#2f1814", fontSize: 20, fontWeight: "800" },
 });
