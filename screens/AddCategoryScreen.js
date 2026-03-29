@@ -1,7 +1,7 @@
 // screens/AddCategoryScreen.js
 
 import { MaterialCommunityIcons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ColorPickerTabs from "../components/ColorPickerTabs";
 import {
     Alert,
@@ -23,10 +23,22 @@ const COLORS = [
   "#F44336", "#E53935", "#D32F2F"
 ];
 
-export default function AddCategoryScreen({ navigation }) {
+export default function AddCategoryScreen({ navigation, route }) {
+  const category = route?.params?.category || null;
+  const isEditMode = route?.name === "UpdateCategory" || Boolean(category?.id);
   const [type, setType] = useState("expense");
   const [name, setName] = useState("");
   const [selectedColor, setSelectedColor] = useState("#FF4444");
+
+  useEffect(() => {
+    if (!category) {
+      return;
+    }
+
+    setType(category.type || "expense");
+    setName(category.name || "");
+    setSelectedColor(category.color || "#FF4444");
+  }, [category]);
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -38,15 +50,17 @@ export default function AddCategoryScreen({ navigation }) {
     const user = userData?.user;
     if (!user) return;
 
-    const { error } = await supabase.from("categories").insert([
-      {
-        user_id: user.id,
-        name,
-        type,
-        icon: "tag",
-        color: selectedColor,
-      },
-    ]);
+    const payload = {
+      user_id: user.id,
+      name: name.trim(),
+      type,
+      icon: category?.icon || "tag",
+      color: selectedColor,
+    };
+
+    const { error } = isEditMode
+      ? await supabase.from("categories").update(payload).eq("id", category.id).eq("user_id", user.id)
+      : await supabase.from("categories").insert([payload]);
 
     if (error) {
       Alert.alert(error.message);
@@ -69,7 +83,7 @@ export default function AddCategoryScreen({ navigation }) {
             />
           </TouchableOpacity>
 
-          <Text style={styles.title}>Add Category</Text>
+          <Text style={styles.title}>{isEditMode ? "Update Category" : "Add Category"}</Text>
 
           <View style={{ width: 26 }} />
         </View>
@@ -117,7 +131,7 @@ export default function AddCategoryScreen({ navigation }) {
       {/* SAVE BUTTON */}
       <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
         <MaterialCommunityIcons name="content-save" size={22} color="#000" />
-        <Text style={styles.saveText}>Add</Text>
+        <Text style={styles.saveText}>{isEditMode ? "Update" : "Add"}</Text>
       </TouchableOpacity>
     </SafeAreaView>
   );

@@ -54,7 +54,9 @@ const ACCOUNT_COLORS = [
   "#C62828",
 ];
 
-export default function AddAccountScreen({ navigation }) {
+export default function AddAccountScreen({ navigation, route }) {
+  const account = route?.params?.account || null;
+  const isEditMode = route?.name === "UpdateAccount" || Boolean(account?.id);
   const [name, setName] = useState("");
   const [balance, setBalance] = useState("");
   const [type, setType] = useState("bank");
@@ -62,6 +64,19 @@ export default function AddAccountScreen({ navigation }) {
   const [icon, setIcon] = useState("business-outline");
   const [isDefault, setIsDefault] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!account) {
+      return;
+    }
+
+    setName(account.name || "");
+    setBalance(String(account.balance ?? ""));
+    setType(account.type || "bank");
+    setColor(account.color || "");
+    setIcon(account.icon || getAccountIconName(account));
+    setIsDefault(Boolean(account.is_default));
+  }, [account]);
 
   useEffect(() => {
     setColor((current) => current || getAccountColor({ name, type }));
@@ -95,16 +110,18 @@ export default function AddAccountScreen({ navigation }) {
         is_default: isDefault,
       };
 
-      const { error } = await supabase.from("accounts").insert([payload]);
+      const { error } = isEditMode
+        ? await supabase.from("accounts").update(payload).eq("id", account.id).eq("user_id", user.id)
+        : await supabase.from("accounts").insert([payload]);
 
       if (error) {
         throw error;
       }
 
-      Alert.alert("Success", "Account created");
+      Alert.alert("Success", isEditMode ? "Account updated" : "Account created");
       navigation.goBack();
     } catch (error) {
-      Alert.alert("Error", error.message || "Could not create account.");
+      Alert.alert("Error", error.message || `Could not ${isEditMode ? "update" : "create"} account.`);
     } finally {
       setSaving(false);
     }
@@ -112,7 +129,7 @@ export default function AddAccountScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScreenHeader title="Add Account" />
+      <ScreenHeader title={isEditMode ? "Update Account" : "Add Account"} />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={styles.inlineField}>
@@ -181,7 +198,7 @@ export default function AddAccountScreen({ navigation }) {
 
       <Pressable style={styles.saveButton} onPress={saveAccount} disabled={saving}>
         <Feather name="save" size={22} color="#2f1814" />
-        <Text style={styles.saveButtonText}>{saving ? "Saving..." : "Add"}</Text>
+        <Text style={styles.saveButtonText}>{saving ? "Saving..." : isEditMode ? "Update" : "Add"}</Text>
       </Pressable>
     </SafeAreaView>
   );

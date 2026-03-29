@@ -1,6 +1,6 @@
 import Feather from "@expo/vector-icons/Feather";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import ScreenHeader from "../components/ScreenHeader";
@@ -11,7 +11,9 @@ function formatDate(date) {
   return new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }).format(date);
 }
 
-export default function AddLoanScreen({ navigation }) {
+export default function AddLoanScreen({ navigation, route }) {
+  const loan = route?.params?.loan || null;
+  const isEditMode = route?.name === "UpdateLoan" || Boolean(loan?.id);
   const [loanType, setLoanType] = useState("lend");
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
@@ -21,6 +23,19 @@ export default function AddLoanScreen({ navigation }) {
   const [pickerConfig, setPickerConfig] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    if (!loan) {
+      return;
+    }
+
+    setLoanType(loan.type === "borrowing" ? "borrow" : "lend");
+    setName(loan.name || "");
+    setAmount(String(loan.amount ?? ""));
+    setDescription(loan.description || "");
+    setStartDate(loan.start_date ? new Date(loan.start_date) : new Date());
+    setEndDate(loan.end_date ? new Date(loan.end_date) : new Date());
+  }, [loan]);
+
   const saveLoan = async () => {
     if (!name.trim()) return Alert.alert("Error", "Enter loan name");
     if (!amount.trim() || Number(amount) <= 0) return Alert.alert("Error", "Enter a valid amount");
@@ -28,12 +43,15 @@ export default function AddLoanScreen({ navigation }) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("You must be signed in.");
-      const { error } = await supabase.from("loans").insert([{ user_id: user.id, name: name.trim(), amount: Number(amount), type: loanType === "lend" ? "lending" : "borrowing", start_date: startDate.toISOString().split("T")[0], end_date: endDate.toISOString().split("T")[0], description: description.trim() }]);
+      const payload = { user_id: user.id, name: name.trim(), amount: Number(amount), type: loanType === "lend" ? "lending" : "borrowing", start_date: startDate.toISOString().split("T")[0], end_date: endDate.toISOString().split("T")[0], description: description.trim() };
+      const { error } = isEditMode
+        ? await supabase.from("loans").update(payload).eq("id", loan.id).eq("user_id", user.id)
+        : await supabase.from("loans").insert([payload]);
       if (error) throw error;
-      Alert.alert("Success", "Loan added successfully.");
+      Alert.alert("Success", isEditMode ? "Loan updated successfully." : "Loan added successfully.");
       navigation.goBack();
     } catch (error) {
-      Alert.alert("Error", error.message || "Could not save loan.");
+      Alert.alert("Error", error.message || `Could not ${isEditMode ? "update" : "save"} loan.`);
     } finally {
       setSaving(false);
     }
@@ -41,7 +59,7 @@ export default function AddLoanScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScreenHeader title="Add loan" />
+      <ScreenHeader title={isEditMode ? "Update loan" : "Add loan"} />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={styles.segmentRow}>
           {[{ key: "lend", label: "Lending" }, { key: "borrow", label: "Borrowing" }].map((item) => (
@@ -66,7 +84,7 @@ export default function AddLoanScreen({ navigation }) {
       </ScrollView>
       <Pressable style={styles.saveButton} onPress={saveLoan} disabled={saving}>
         <Feather name="save" size={24} color="#2f1814" />
-        <Text style={styles.saveButtonText}>{saving ? "Saving..." : "Add"}</Text>
+        <Text style={styles.saveButtonText}>{saving ? "Saving..." : isEditMode ? "Update" : "Add"}</Text>
       </Pressable>
       {pickerConfig ? <DateTimePicker value={pickerConfig.value} mode="date" display="default" onChange={(_, pickedDate) => { if (!pickedDate) return setPickerConfig(null); if (pickerConfig.field === "start") setStartDate(pickedDate); else setEndDate(pickedDate); setPickerConfig(null); }} /> : null}
     </SafeAreaView>

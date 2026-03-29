@@ -1,7 +1,7 @@
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import FloatingButton from "../components/FloatingButton";
 import ScreenHeader from "../components/ScreenHeader";
@@ -40,7 +40,11 @@ export default function LoansScreen({ navigation }) {
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
           {loans.map((loan) => (
-            <View key={loan.id} style={styles.card}>
+            <Pressable
+              key={loan.id}
+              style={styles.card}
+              onPress={() => navigation.navigate("UpdateLoan", { loan })}
+            >
               <View style={styles.row}>
                 <Text style={styles.cardTitle}>{loan.name || "Loan"}</Text>
                 <View style={[styles.typePill, loan.type === "borrowing" && styles.typePillBorrowing]}>
@@ -50,7 +54,7 @@ export default function LoansScreen({ navigation }) {
               <Text style={styles.cardAmount}>{formatCurrency(loan.amount)}</Text>
               {loan.description ? <Text style={styles.cardDescription}>{loan.description}</Text> : null}
               <Text style={styles.cardMeta}>{loan.start_date || "-"} to {loan.end_date || "-"}</Text>
-            </View>
+            </Pressable>
           ))}
         </ScrollView>
       )}

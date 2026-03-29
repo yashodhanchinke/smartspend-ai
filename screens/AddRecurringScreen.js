@@ -13,7 +13,9 @@ const PERIODS = ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"];
 function formatDate(date) { return new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }).format(date); }
 function formatTime(date) { return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit" }).format(date); }
 
-export default function AddRecurringScreen({ navigation }) {
+export default function AddRecurringScreen({ navigation, route }) {
+  const recurringItem = route?.params?.recurring || null;
+  const isEditMode = route?.name === "UpdateRecurring" || Boolean(recurringItem?.id);
   const [type, setType] = useState("expense");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
@@ -28,6 +30,24 @@ export default function AddRecurringScreen({ navigation }) {
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
   const [pickerConfig, setPickerConfig] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!recurringItem) {
+      return;
+    }
+
+    setType(recurringItem.type || "expense");
+    setTitle(recurringItem.title || "");
+    setAmount(String(recurringItem.amount ?? ""));
+    setPeriod(
+      recurringItem.period
+        ? recurringItem.period.charAt(0).toUpperCase() + recurringItem.period.slice(1)
+        : "Monthly"
+    );
+    setRunDate(recurringItem.next_run ? new Date(recurringItem.next_run) : new Date());
+    setSelectedAccountId(recurringItem.account_id || null);
+    setSelectedCategoryId(recurringItem.category_id || null);
+  }, [recurringItem]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -58,12 +78,15 @@ export default function AddRecurringScreen({ navigation }) {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("You must be signed in.");
       const fallbackCategoryId = categories.find((item) => item.id === selectedCategoryId)?.id || null;
-      const { error } = await supabase.from("recurring_transactions").insert([{ user_id: user.id, title: title.trim(), amount: Number(amount), type, period: period.toLowerCase(), next_run: runDate.toISOString().split("T")[0], account_id: selectedAccountId, category_id: fallbackCategoryId }]);
+      const payload = { user_id: user.id, title: title.trim(), amount: Number(amount), type, period: period.toLowerCase(), next_run: runDate.toISOString().split("T")[0], account_id: selectedAccountId, category_id: fallbackCategoryId };
+      const { error } = isEditMode
+        ? await supabase.from("recurring_transactions").update(payload).eq("id", recurringItem.id).eq("user_id", user.id)
+        : await supabase.from("recurring_transactions").insert([payload]);
       if (error) throw error;
-      Alert.alert("Success", "Recurring transaction added.");
+      Alert.alert("Success", isEditMode ? "Recurring transaction updated." : "Recurring transaction added.");
       navigation.goBack();
     } catch (error) {
-      Alert.alert("Error", error.message || "Could not save recurring transaction.");
+      Alert.alert("Error", error.message || `Could not ${isEditMode ? "update" : "save"} recurring transaction.`);
     } finally {
       setSaving(false);
     }
@@ -71,7 +94,7 @@ export default function AddRecurringScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScreenHeader title="Add recurring" />
+      <ScreenHeader title={isEditMode ? "Update recurring" : "Add recurring"} />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={styles.segmentRow}>
           {["expense", "income"].map((item) => (
@@ -107,7 +130,7 @@ export default function AddRecurringScreen({ navigation }) {
       </ScrollView>
       <Pressable style={styles.saveButton} onPress={saveRecurring} disabled={saving}>
         <Feather name="save" size={24} color="#2f1814" />
-        <Text style={styles.saveButtonText}>{saving ? "Saving..." : "Add"}</Text>
+        <Text style={styles.saveButtonText}>{saving ? "Saving..." : isEditMode ? "Update" : "Add"}</Text>
       </Pressable>
       {pickerConfig ? <DateTimePicker value={pickerConfig.value} mode={pickerConfig.mode} display="default" onChange={(_, pickedValue) => { if (!pickedValue) return setPickerConfig(null); if (pickerConfig.field === "date") setRunDate(pickedValue); else setRunTime(pickedValue); setPickerConfig(null); }} /> : null}
     </SafeAreaView>

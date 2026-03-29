@@ -1,8 +1,17 @@
 import Feather from "@expo/vector-icons/Feather";
-import { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import {
+  FlatList,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
+
+const START_YEAR = 1950;
 
 const parseStoredDate = (value) => {
   const [year, month, day] = String(value || "").split("-").map(Number);
@@ -17,19 +26,34 @@ const formatDateKey = (value) => {
   return `${year}-${month}-${day}`;
 };
 
-const getHeatColor = (amount, maxAmount, isToday) => {
-  if (amount <= 0 || maxAmount <= 0) return "#43302a";
+const buildMonthRange = (currentMonth) => {
+  const months = [];
 
-  const intensity = amount / maxAmount;
+  for (let year = START_YEAR; year <= currentMonth.getFullYear(); year += 1) {
+    const endMonth = year === currentMonth.getFullYear() ? currentMonth.getMonth() : 11;
 
-  if (intensity < 0.18) return "#5a4038";
-  if (intensity < 0.35) return "#725148";
-  if (intensity < 0.55) return "#946558";
-  if (intensity < 0.78) return "#bf806d";
+    for (let month = 0; month <= endMonth; month += 1) {
+      months.push({
+        key: `${year}-${String(month + 1).padStart(2, "0")}`,
+        year,
+        month,
+      });
+    }
+  }
+
+  return months;
+};
+
+const getHeatColor = (count) => {
+  if (!count) return "#43302a";
+  if (count === 1) return "#5d4339";
+  if (count === 2) return "#7a5649";
+  if (count === 3) return "#996b5b";
+  if (count <= 5) return "#bb836f";
   return "#efb7a2";
 };
 
-const buildMonthCells = (visibleMonth, today, dayAmountMap) => {
+const buildMonthCells = (visibleMonth, today, dayCountMap) => {
   const year = visibleMonth.getFullYear();
   const month = visibleMonth.getMonth();
   const firstDay = new Date(year, month, 1).getDay();
@@ -51,7 +75,7 @@ const buildMonthCells = (visibleMonth, today, dayAmountMap) => {
     cells.push({
       key: dateKey,
       day,
-      amount: dayAmountMap[dateKey] || 0,
+      count: dayCountMap[dateKey] || 0,
       isToday,
     });
   }
@@ -59,17 +83,85 @@ const buildMonthCells = (visibleMonth, today, dayAmountMap) => {
   return cells;
 };
 
+const getWeekRowCount = (year, month) => {
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  return Math.ceil((firstDay + daysInMonth) / 7);
+};
+
+const HeatmapMonthPage = memo(function HeatmapMonthPage({
+  dayCountMap,
+  item,
+  pageWidth,
+  today,
+}) {
+  const monthDate = new Date(item.year, item.month, 1);
+  const cells = buildMonthCells(monthDate, today, dayCountMap);
+  const weekRows = getWeekRowCount(item.year, item.month);
+
+  return (
+    <View
+      style={[
+        styles.page,
+        {
+          width: pageWidth,
+          minHeight: weekRows === 4 ? 236 : weekRows === 5 ? 286 : 336,
+        },
+      ]}
+    >
+      <Text style={styles.monthTitle}>
+        {monthDate.toLocaleDateString("en-US", {
+          month: "short",
+          year: "numeric",
+        })}
+      </Text>
+
+      <View style={styles.grid}>
+        {cells.map((cell) => {
+          if (cell.empty) {
+            return <View key={cell.key} style={styles.emptyDay} />;
+          }
+
+          return (
+            <View
+              key={cell.key}
+              style={[
+                styles.day,
+                { backgroundColor: getHeatColor(cell.count) },
+                cell.isToday && styles.today,
+              ]}
+            >
+              <Text style={styles.dayText}>{cell.day}</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+});
+
 export default function CalendarHeatmap({ onPress, refreshKey = 0 }) {
   const [transactions, setTransactions] = useState([]);
+  const listRef = useRef(null);
   const today = new Date();
-  const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const currentMonthKey = `${currentMonth.getFullYear()}-${currentMonth.getMonth()}`;
-  const [visibleMonth, setVisibleMonth] = useState(currentMonth);
+  const currentMonthYear = today.getFullYear();
+  const currentMonthNumber = today.getMonth();
+  const months = useMemo(
+    () => buildMonthRange(new Date(currentMonthYear, currentMonthNumber, 1)),
+    [currentMonthNumber, currentMonthYear]
+  );
+  const currentMonthIndex = months.length - 1;
+  const { width } = useWindowDimensions();
+  const pageWidth = Math.max(width - 36, 280);
 
   useEffect(() => {
-    const [year, month] = currentMonthKey.split("-").map(Number);
-    setVisibleMonth(new Date(year, month, 1));
-  }, [refreshKey, currentMonthKey]);
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex?.({
+        index: currentMonthIndex,
+        animated: false,
+      });
+    });
+  }, [currentMonthIndex, refreshKey]);
 
   useEffect(() => {
     loadHeatmap();
@@ -87,7 +179,7 @@ export default function CalendarHeatmap({ onPress, refreshKey = 0 }) {
 
     const { data, error } = await supabase
       .from("transactions")
-      .select("date,amount,type")
+      .select("date,type")
       .eq("user_id", user.id);
 
     if (error) {
@@ -99,104 +191,72 @@ export default function CalendarHeatmap({ onPress, refreshKey = 0 }) {
     setTransactions(data || []);
   };
 
-  const dayAmountMap = useMemo(() => {
-    const totals = {};
+  const dayCountMap = useMemo(() => {
+    const counts = {};
 
     transactions.forEach((transaction) => {
-      if (transaction.type !== "expense") {
+      if (transaction.type === "transfer") {
         return;
       }
 
       const key = formatDateKey(parseStoredDate(transaction.date));
-      totals[key] = (totals[key] || 0) + Number(transaction.amount || 0);
+      counts[key] = (counts[key] || 0) + 1;
     });
 
-    return totals;
+    return counts;
   }, [transactions]);
 
-  const cells = buildMonthCells(visibleMonth, today, dayAmountMap);
-  const isCurrentMonth =
-    visibleMonth.getFullYear() === currentMonth.getFullYear() &&
-    visibleMonth.getMonth() === currentMonth.getMonth();
-  const monthMaxAmount = cells.reduce(
-    (highest, cell) => (cell.empty ? highest : Math.max(highest, cell.amount || 0)),
-    0
+  const renderMonth = ({ item }) => (
+    <HeatmapMonthPage
+      item={item}
+      pageWidth={pageWidth}
+      today={today}
+      dayCountMap={dayCountMap}
+    />
   );
 
   return (
-    <Pressable style={styles.container} onPress={onPress}>
-      <View style={styles.headerRow}>
+    <View style={styles.container}>
+      <Pressable style={styles.headerRow} onPress={onPress}>
         <View style={styles.headerLeft}>
           <Feather name="calendar" size={22} color={colors.text} />
           <Text style={styles.title}>Calendar heatmap</Text>
         </View>
 
         <Feather name="chevron-right" size={24} color={colors.text} />
-      </View>
+      </Pressable>
 
       <View style={styles.divider} />
 
-      <View style={styles.content}>
-        <View style={styles.monthSwitcher}>
-          <TouchableOpacity
-            style={styles.navButton}
-            onPress={() =>
-              setVisibleMonth(
-                (current) => new Date(current.getFullYear(), current.getMonth() - 1, 1)
-              )
-            }
-          >
-            <Feather name="chevron-left" size={20} color={colors.gold} />
-          </TouchableOpacity>
-
-          <Text style={styles.monthTitle}>
-            {visibleMonth.toLocaleDateString("en-US", {
-              month: "short",
-              year: "numeric",
-            })}
-          </Text>
-
-          <TouchableOpacity
-            style={[styles.navButton, isCurrentMonth && styles.navButtonDisabled]}
-            onPress={() => {
-              if (!isCurrentMonth) {
-                setVisibleMonth(
-                  (current) => new Date(current.getFullYear(), current.getMonth() + 1, 1)
-                );
-              }
-            }}
-            disabled={isCurrentMonth}
-          >
-            <Feather
-              name="chevron-right"
-              size={20}
-              color={isCurrentMonth ? "#7a6157" : colors.gold}
-            />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.grid}>
-          {cells.map((cell) => {
-            if (cell.empty) {
-              return <View key={cell.key} style={styles.emptyDay} />;
-            }
-
-            return (
-              <View
-                key={cell.key}
-                style={[
-                  styles.day,
-                  { backgroundColor: getHeatColor(cell.amount, monthMaxAmount, cell.isToday) },
-                  cell.isToday && styles.today,
-                ]}
-              >
-                <Text style={styles.dayText}>{cell.day}</Text>
-              </View>
-            );
-          })}
-        </View>
-      </View>
-    </Pressable>
+      <FlatList
+        ref={listRef}
+        data={months}
+        style={styles.monthPager}
+        horizontal
+        pagingEnabled
+        snapToInterval={pageWidth}
+        disableIntervalMomentum
+        decelerationRate="fast"
+        showsHorizontalScrollIndicator={false}
+        keyExtractor={(item) => item.key}
+        initialNumToRender={3}
+        maxToRenderPerBatch={2}
+        updateCellsBatchingPeriod={16}
+        windowSize={3}
+        removeClippedSubviews
+        renderItem={renderMonth}
+        getItemLayout={(_, index) => ({
+          length: pageWidth,
+          offset: pageWidth * index,
+          index,
+        })}
+        initialScrollIndex={currentMonthIndex}
+        onMomentumScrollEnd={(event) => {
+          void event;
+        }}
+        onScrollToIndexFailed={() => {}}
+      />
+    </View>
   );
 }
 
@@ -234,10 +294,14 @@ const styles = StyleSheet.create({
     backgroundColor: "#58423a",
   },
 
-  content: {
+  monthPager: {
+    width: "100%",
+  },
+
+  page: {
     paddingHorizontal: 18,
     paddingTop: 18,
-    paddingBottom: 18,
+    paddingBottom: 8,
   },
 
   monthTitle: {
@@ -245,32 +309,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "800",
     textAlign: "center",
-  },
-
-  monthSwitcher: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     marginBottom: 14,
-  },
-
-  navButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#4a352f",
-  },
-
-  navButtonDisabled: {
-    backgroundColor: "#40302b",
   },
 
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    justifyContent: "flex-start",
+    marginBottom: 0,
   },
 
   day: {
@@ -279,7 +324,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 8,
+    marginBottom: 6,
     borderWidth: 1,
     borderColor: "rgba(255, 233, 226, 0.02)",
   },
@@ -287,7 +332,7 @@ const styles = StyleSheet.create({
   emptyDay: {
     width: "14.285%",
     aspectRatio: 1,
-    marginBottom: 8,
+    marginBottom: 6,
   },
 
   today: {

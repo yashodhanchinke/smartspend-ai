@@ -11,10 +11,15 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import TransactionListItem from "../components/TransactionListItem";
 import { supabase } from "../lib/supabase";
 import { getAccountColor, getAccountIconName } from "../util/accountAppearance";
 
 const { width } = Dimensions.get("window");
+const parseStoredDate = (value) => {
+  const [year, month, day] = String(value || "").split("-").map(Number);
+  return new Date(year || 2000, (month || 1) - 1, day || 1);
+};
 
 const DEFAULT_ACCOUNTS = [
   { id: "bank-default", name: "Bank", type: "bank", balance: 0 },
@@ -77,7 +82,7 @@ export default function AccountsScreen({ navigation, route }) {
       query = query.or(`account_id.eq.${account.id},to_account_id.eq.${account.id}`);
     }
 
-    const { data } = await query.order("date", { ascending: false }).order("created_at", {
+    const { data } = await query.order("date", { ascending: false }).order("time", {
       ascending: false,
     });
 
@@ -222,7 +227,15 @@ export default function AccountsScreen({ navigation, route }) {
 
   const renderCard = ({ item, index }) => (
     <View style={styles.cardPage}>
-      <View style={[styles.accountCard, { backgroundColor: item.color }]}>
+      <TouchableOpacity
+        style={[styles.accountCard, { backgroundColor: item.color }]}
+        activeOpacity={String(item.id).includes("-default") ? 1 : 0.9}
+        onPress={() => {
+          if (!String(item.id).includes("-default")) {
+            navigation.navigate("UpdateAccount", { account: item });
+          }
+        }}
+      >
         <View style={styles.cardHeader}>
           <View style={styles.cardHeaderTextWrap}>
             <View style={styles.cardHeaderText}>
@@ -248,7 +261,7 @@ export default function AccountsScreen({ navigation, route }) {
         <Text style={styles.cardCount}>
           Account {index + 1} of {accounts.length}
         </Text>
-      </View>
+      </TouchableOpacity>
     </View>
   );
 
@@ -307,48 +320,30 @@ export default function AccountsScreen({ navigation, route }) {
               <Text style={styles.emptySub}>Please add transactions to this account</Text>
             </View>
           ) : (
-            transactions.map((transaction) => {
+            transactions.map((transaction, index) => {
               const amount = Number(transaction.amount || 0);
               const isExpense =
                 transaction.type === "expense" ||
                 (transaction.type === "transfer" &&
                   transaction.account_id === selectedAccount?.id);
-              const amountColor = isExpense ? "#ff8b8b" : "#6ddf9c";
 
               return (
-                <View key={transaction.id} style={styles.txRow}>
-                  <View style={styles.txLeft}>
-                    <View
-                      style={[
-                        styles.catIcon,
-                        { backgroundColor: transaction.categories?.color || "#5a4138" },
-                      ]}
-                    >
-                      <MaterialCommunityIcons
-                        name={transaction.categories?.icon || "bank-transfer"}
-                        size={18}
-                        color="#fff6ef"
-                      />
-                    </View>
-
-                    <View style={styles.txCopy}>
-                      <Text style={styles.txTitle}>
-                        {transaction.title || transaction.categories?.name || "Transaction"}
-                      </Text>
-                      <Text style={styles.txSub}>
-                        {transaction.type === "transfer"
-                          ? transaction.account_id === selectedAccount?.id
-                            ? "Transfer sent"
-                            : "Transfer received"
-                          : transaction.categories?.name || "Uncategorized"}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <Text style={[styles.txAmount, { color: amountColor }]}>
-                    {isExpense ? "-" : "+"}₹{amount.toFixed(2)}
-                  </Text>
-                </View>
+                <TransactionListItem
+                  key={transaction.id}
+                  title={transaction.title || transaction.categories?.name || "Transaction"}
+                  accountLabel={selectedAccount?.name || "Account"}
+                  dateLabel={parseStoredDate(transaction.date).toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                  amount={amount}
+                  time={transaction.time}
+                  transactionType={isExpense ? "expense" : "income"}
+                  amountPrefix={isExpense ? "-" : "+"}
+                  categoryColor={transaction.categories?.color || "#5a4138"}
+                  categoryIcon={transaction.categories?.icon || "bank-transfer"}
+                  showDivider={index !== transactions.length - 1}
+                />
               );
             })
           )}

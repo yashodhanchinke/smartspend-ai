@@ -1,7 +1,7 @@
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import FloatingButton from "../components/FloatingButton";
 import ScreenHeader from "../components/ScreenHeader";
@@ -60,7 +60,11 @@ export default function GoalsScreen({ navigation }) {
             const progress = target > 0 ? Math.min(current / target, 1) : 0;
 
             return (
-              <View key={goal.id} style={styles.card}>
+              <Pressable
+                key={goal.id}
+                style={styles.card}
+                onPress={() => navigation.navigate("UpdateGoal", { goal })}
+              >
                 <View style={styles.cardHeader}>
                   <View style={[styles.colorDot, { backgroundColor: goal.color || "#ffb49a" }]} />
                   <Text style={styles.cardTitle}>{goal.title || "Goal"}</Text>
@@ -74,7 +78,7 @@ export default function GoalsScreen({ navigation }) {
                 <Text style={styles.cardMeta}>
                   {goal.start_date || "-"} to {goal.end_date || "-"}
                 </Text>
-              </View>
+              </Pressable>
             );
           })}
         </ScrollView>

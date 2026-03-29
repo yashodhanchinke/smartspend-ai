@@ -2,7 +2,7 @@ import Feather from "@expo/vector-icons/Feather";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import FloatingButton from "../components/FloatingButton";
 import ScreenHeader from "../components/ScreenHeader";
@@ -33,6 +33,7 @@ export default function BudgetsScreen({ navigation }) {
         color,
         mode,
         budget_type,
+        notes,
         budget_categories (
           category_id,
           categories (
@@ -85,7 +86,11 @@ export default function BudgetsScreen({ navigation }) {
             const leadCategory = linkedCategories[0];
 
             return (
-              <View key={budget.id} style={styles.card}>
+              <Pressable
+                key={budget.id}
+                style={styles.card}
+                onPress={() => navigation.navigate("UpdateBudget", { budget })}
+              >
                 <View style={styles.cardHeader}>
                   <View style={styles.cardLeft}>
                     <View style={[styles.iconBadge, { backgroundColor: `${budget.color || "#ffb49a"}33` }]}>
@@ -127,7 +132,7 @@ export default function BudgetsScreen({ navigation }) {
                     </View>
                   ) : null}
                 </View>
-              </View>
+              </Pressable>
             );
           })}
         </ScrollView>

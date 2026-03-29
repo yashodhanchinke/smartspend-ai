@@ -1,20 +1,24 @@
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import {
+  FlatList,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import TransactionListItem from "../components/TransactionListItem";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 import { showTransactionEntryOptions } from "../util/transactionEntry";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const START_YEAR = 1950;
 
 const parseStoredDate = (value) => {
   const [year, month, day] = String(value || "").split("-").map(Number);
@@ -27,15 +31,6 @@ const formatDateKey = (value) => {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-};
-
-const formatTimeLabel = (timeValue) => {
-  if (!timeValue) return "--:--";
-
-  return new Date(`2000-01-01T${timeValue}`).toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 };
 
 const buildMonthCells = (visibleMonth, selectedDate) => {
@@ -63,13 +58,84 @@ const buildMonthCells = (visibleMonth, selectedDate) => {
   return cells;
 };
 
+const getCalendarPageHeight = (cellCount) => {
+  const weekRows = Math.ceil(cellCount / 7);
+
+  if (weekRows <= 4) {
+    return 236;
+  }
+
+  if (weekRows === 5) {
+    return 288;
+  }
+
+  return 340;
+};
+
+const buildMonthRange = (currentMonth) => {
+  const months = [];
+
+  for (let year = START_YEAR; year <= currentMonth.getFullYear(); year += 1) {
+    const endMonth = year === currentMonth.getFullYear() ? currentMonth.getMonth() : 11;
+
+    for (let month = 0; month <= endMonth; month += 1) {
+      months.push({
+        key: `${year}-${String(month + 1).padStart(2, "0")}`,
+        year,
+        month,
+      });
+    }
+  }
+
+  return months;
+};
+
+const CalendarMonthPage = memo(function CalendarMonthPage({
+  item,
+  pageWidth,
+  selectedDateKey,
+  onSelectDate,
+}) {
+  const monthDate = new Date(item.year, item.month, 1);
+  const monthCells = buildMonthCells(monthDate, parseStoredDate(selectedDateKey));
+  const pageHeight = getCalendarPageHeight(monthCells.length);
+
+  return (
+    <View style={[styles.page, { width: pageWidth, height: pageHeight }]}>
+      <View style={styles.grid}>
+        {monthCells.map((cell) => {
+          if (cell.empty) {
+            return <View key={cell.key} style={styles.emptyDay} />;
+          }
+
+          return (
+            <TouchableOpacity
+              key={cell.key}
+              style={[styles.day, cell.selected && styles.selectedDay]}
+              onPress={() => onSelectDate(cell.date)}
+            >
+              <Text style={[styles.dayText, cell.selected && styles.selectedDayText]}>
+                {cell.day}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+});
+
 export default function CalendarHeatmapScreen({ navigation }) {
   const today = new Date();
+  const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const months = useMemo(() => buildMonthRange(currentMonth), [currentMonth]);
+  const currentMonthIndex = months.length - 1;
+  const listRef = useRef(null);
+  const { width } = useWindowDimensions();
+  const pageWidth = Math.max(width - 32, 300);
   const [transactions, setTransactions] = useState([]);
   const [selectedDate, setSelectedDate] = useState(today);
-  const [visibleMonth, setVisibleMonth] = useState(
-    new Date(today.getFullYear(), today.getMonth(), 1)
-  );
+  const [visibleIndex, setVisibleIndex] = useState(currentMonthIndex);
 
   const fetchTransactions = useCallback(async () => {
     const {
@@ -81,16 +147,18 @@ export default function CalendarHeatmapScreen({ navigation }) {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("transactions")
-      .select(`
-        *,
-        categories(name,icon,color),
-        accounts(name)
-      `)
-      .eq("user_id", user.id)
-      .order("date", { ascending: false })
-      .order("time", { ascending: false });
+    const [{ data, error }, { data: accountRows }] = await Promise.all([
+      supabase
+        .from("transactions")
+        .select(`
+          *,
+          categories(name,icon,color)
+        `)
+        .eq("user_id", user.id)
+        .order("date", { ascending: false })
+        .order("time", { ascending: false }),
+      supabase.from("accounts").select("id,name").eq("user_id", user.id),
+    ]);
 
     if (error) {
       console.warn("Could not load calendar transactions:", error.message);
@@ -98,7 +166,14 @@ export default function CalendarHeatmapScreen({ navigation }) {
       return;
     }
 
-    setTransactions(data || []);
+    const accountMap = Object.fromEntries((accountRows || []).map((account) => [account.id, account]));
+
+    setTransactions(
+      (data || []).map((transaction) => ({
+        ...transaction,
+        account: accountMap[transaction.account_id] || null,
+      }))
+    );
   }, []);
 
   useFocusEffect(
@@ -123,11 +198,18 @@ export default function CalendarHeatmapScreen({ navigation }) {
     .filter((transaction) => transaction.type === "expense")
     .reduce((total, transaction) => total + Number(transaction.amount || 0), 0);
 
-  const monthCells = buildMonthCells(visibleMonth, selectedDate);
-  const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const isCurrentMonth =
-    visibleMonth.getFullYear() === currentMonth.getFullYear() &&
-    visibleMonth.getMonth() === currentMonth.getMonth();
+  const visibleMonth = months[visibleIndex] || months[currentMonthIndex];
+  const renderMonthPage = useCallback(
+    ({ item }) => (
+      <CalendarMonthPage
+        item={item}
+        pageWidth={pageWidth}
+        selectedDateKey={selectedDateKey}
+        onSelectDate={setSelectedDate}
+      />
+    ),
+    [pageWidth, selectedDateKey]
+  );
 
   return (
     <SafeAreaView style={styles.screen}>
@@ -160,43 +242,12 @@ export default function CalendarHeatmapScreen({ navigation }) {
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.monthRow}>
-          <TouchableOpacity
-            style={styles.monthButton}
-            onPress={() =>
-              setVisibleMonth(
-                (current) => new Date(current.getFullYear(), current.getMonth() - 1, 1)
-              )
-            }
-          >
-            <Feather name="chevron-left" size={22} color={colors.gold} />
-          </TouchableOpacity>
-
-          <Text style={styles.monthTitle}>
-            {visibleMonth.toLocaleDateString("en-US", {
-              month: "long",
-              year: "numeric",
-            })}
-          </Text>
-
-          <TouchableOpacity
-            style={[styles.monthButton, isCurrentMonth && styles.monthButtonDisabled]}
-            onPress={() => {
-              if (!isCurrentMonth) {
-                setVisibleMonth(
-                  (current) => new Date(current.getFullYear(), current.getMonth() + 1, 1)
-                );
-              }
-            }}
-            disabled={isCurrentMonth}
-          >
-            <Feather
-              name="chevron-right"
-              size={22}
-              color={isCurrentMonth ? "#7a6157" : colors.gold}
-            />
-          </TouchableOpacity>
-        </View>
+        <Text style={styles.monthTitle}>
+          {new Date(visibleMonth.year, visibleMonth.month, 1).toLocaleDateString("en-US", {
+            month: "long",
+            year: "numeric",
+          })}
+        </Text>
 
         <View style={styles.weekRow}>
           {WEEKDAY_LABELS.map((label) => (
@@ -206,25 +257,35 @@ export default function CalendarHeatmapScreen({ navigation }) {
           ))}
         </View>
 
-        <View style={styles.grid}>
-          {monthCells.map((cell) => {
-            if (cell.empty) {
-              return <View key={cell.key} style={styles.emptyDay} />;
-            }
-
-            return (
-              <TouchableOpacity
-                key={cell.key}
-                style={[styles.day, cell.selected && styles.selectedDay]}
-                onPress={() => setSelectedDate(cell.date)}
-              >
-                <Text style={[styles.dayText, cell.selected && styles.selectedDayText]}>
-                  {cell.day}
-                </Text>
-              </TouchableOpacity>
-            );
+        <FlatList
+          ref={listRef}
+          data={months}
+          horizontal
+          pagingEnabled
+          snapToInterval={pageWidth}
+          disableIntervalMomentum
+          decelerationRate="fast"
+          showsHorizontalScrollIndicator={false}
+          keyExtractor={(item) => item.key}
+          initialScrollIndex={currentMonthIndex}
+          initialNumToRender={3}
+          maxToRenderPerBatch={2}
+          updateCellsBatchingPeriod={16}
+          windowSize={3}
+          removeClippedSubviews
+          getItemLayout={(_, index) => ({
+            length: pageWidth,
+            offset: pageWidth * index,
+            index,
           })}
-        </View>
+          renderItem={renderMonthPage}
+          extraData={selectedDateKey}
+          onMomentumScrollEnd={(event) => {
+            const nextIndex = Math.round(event.nativeEvent.contentOffset.x / pageWidth);
+            setVisibleIndex(Math.max(0, Math.min(nextIndex, months.length - 1)));
+          }}
+          onScrollToIndexFailed={() => {}}
+        />
 
         <View style={styles.summaryRow}>
           <View style={styles.summaryCard}>
@@ -259,53 +320,26 @@ export default function CalendarHeatmapScreen({ navigation }) {
         {selectedTransactions.length === 0 ? (
           <Text style={styles.emptyText}>No transactions for this date.</Text>
         ) : (
-          selectedTransactions.map((transaction) => (
-            <View key={transaction.id} style={styles.transactionRow}>
-              <View style={styles.transactionLeft}>
-                <View
-                  style={[
-                    styles.transactionIcon,
-                    { backgroundColor: transaction.categories?.color || "#5a4138" },
-                  ]}
-                >
-                  <MaterialCommunityIcons
-                    name={transaction.categories?.icon || "credit-card-outline"}
-                    size={18}
-                    color="#fff3ea"
-                  />
-                </View>
-
-                <View style={styles.transactionTextWrap}>
-                  <Text style={styles.transactionTitle}>
-                    {transaction.title || transaction.categories?.name || "Transaction"}
-                  </Text>
-                  <Text style={styles.transactionMeta}>
-                    {transaction.accounts?.name || "Account"} •{" "}
-                    {formatDateKey(parseStoredDate(transaction.date)) === formatDateKey(today)
-                      ? "Today"
-                      : selectedDate.toLocaleDateString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                        })}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.transactionAmountWrap}>
-                <Text
-                  style={
-                    transaction.type === "expense"
-                      ? styles.expenseAmount
-                      : transaction.type === "income"
-                      ? styles.incomeAmount
-                      : styles.neutralAmount
-                  }
-                >
-                  ₹{Number(transaction.amount || 0).toFixed(2)}
-                </Text>
-                <Text style={styles.transactionTime}>{formatTimeLabel(transaction.time)}</Text>
-              </View>
-            </View>
+          selectedTransactions.map((transaction, index) => (
+            <TransactionListItem
+              key={transaction.id}
+              title={transaction.title || transaction.categories?.name || "Transaction"}
+              accountLabel={transaction.account?.name || "Account"}
+              dateLabel={
+                formatDateKey(parseStoredDate(transaction.date)) === formatDateKey(today)
+                  ? "Today"
+                  : selectedDate.toLocaleDateString("en-US", {
+                      month: "short",
+                      day: "numeric",
+                    })
+              }
+              amount={transaction.amount}
+              time={transaction.time}
+              transactionType={transaction.type}
+              categoryColor={transaction.categories?.color || "#5a4138"}
+              categoryIcon={transaction.categories?.icon || "credit-card-outline"}
+              showDivider={index !== selectedTransactions.length - 1}
+            />
           ))
         )}
       </ScrollView>
@@ -354,35 +388,18 @@ const styles = StyleSheet.create({
     paddingBottom: 120,
   },
 
-  monthRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 22,
-  },
-
-  monthButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  monthButtonDisabled: {
-    opacity: 0.45,
-  },
-
   monthTitle: {
     color: colors.text,
     fontSize: 20,
     fontWeight: "700",
+    textAlign: "center",
+    marginBottom: 18,
   },
 
   weekRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    marginBottom: 8,
+    marginBottom: 6,
   },
 
   weekLabel: {
@@ -396,7 +413,10 @@ const styles = StyleSheet.create({
   grid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    marginBottom: 20,
+  },
+
+  page: {
+    paddingBottom: 0,
   },
 
   day: {
@@ -405,13 +425,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 24,
-    marginBottom: 10,
+    marginBottom: 6,
   },
 
   emptyDay: {
     width: "14.285%",
     aspectRatio: 1,
-    marginBottom: 10,
+    marginBottom: 6,
   },
 
   selectedDay: {
@@ -435,7 +455,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     gap: 12,
-    marginBottom: 24,
+    marginBottom: 20,
   },
 
   summaryCard: {
@@ -443,26 +463,27 @@ const styles = StyleSheet.create({
     backgroundColor: "#2f211d",
     borderWidth: 1,
     borderColor: "rgba(255, 225, 208, 0.08)",
-    borderRadius: 20,
-    padding: 16,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
 
   summaryLabelRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 10,
+    marginBottom: 8,
   },
 
   summaryLabel: {
     color: colors.text,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
     marginLeft: 8,
   },
 
   summaryAmount: {
     color: colors.text,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "800",
   },
 
@@ -481,73 +502,6 @@ const styles = StyleSheet.create({
 
   emptyText: {
     color: colors.muted,
-  },
-
-  transactionRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 18,
-  },
-
-  transactionLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-    marginRight: 12,
-  },
-
-  transactionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-
-  transactionTextWrap: {
-    flex: 1,
-  },
-
-  transactionTitle: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: "700",
-  },
-
-  transactionMeta: {
-    color: "#d2bdb2",
-    fontSize: 13,
-    marginTop: 4,
-  },
-
-  transactionAmountWrap: {
-    alignItems: "flex-end",
-  },
-
-  incomeAmount: {
-    color: "#79ff8a",
-    fontWeight: "800",
-    fontSize: 16,
-  },
-
-  expenseAmount: {
-    color: "#ff7f76",
-    fontWeight: "800",
-    fontSize: 16,
-  },
-
-  neutralAmount: {
-    color: colors.text,
-    fontWeight: "800",
-    fontSize: 16,
-  },
-
-  transactionTime: {
-    color: "#d2bdb2",
-    fontSize: 13,
-    marginTop: 4,
   },
 
   fab: {

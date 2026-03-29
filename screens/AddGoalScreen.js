@@ -1,7 +1,7 @@
 import Feather from "@expo/vector-icons/Feather";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import ColorPickerTabs from "../components/ColorPickerTabs";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -15,7 +15,9 @@ function formatDate(date) {
   return new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }).format(date);
 }
 
-export default function AddGoalScreen({ navigation }) {
+export default function AddGoalScreen({ navigation, route }) {
+  const goal = route?.params?.goal || null;
+  const isEditMode = route?.name === "UpdateGoal" || Boolean(goal?.id);
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [startDate, setStartDate] = useState(new Date());
@@ -24,6 +26,18 @@ export default function AddGoalScreen({ navigation }) {
   const [pickerConfig, setPickerConfig] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  useEffect(() => {
+    if (!goal) {
+      return;
+    }
+
+    setTitle(goal.title || "");
+    setAmount(String(goal.target_amount ?? ""));
+    setStartDate(goal.start_date ? new Date(goal.start_date) : new Date());
+    setEndDate(goal.end_date ? new Date(goal.end_date) : new Date());
+    setSelectedColor(goal.color || "#FF4433");
+  }, [goal]);
+
   const saveGoal = async () => {
     if (!title.trim()) return Alert.alert("Error", "Enter a goal title");
     if (!amount.trim() || Number(amount) <= 0) return Alert.alert("Error", "Enter a valid target amount");
@@ -31,12 +45,15 @@ export default function AddGoalScreen({ navigation }) {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("You must be signed in.");
-      const { error } = await supabase.from("goals").insert([{ user_id: user.id, title: title.trim(), target_amount: Number(amount), current_amount: 0, start_date: startDate.toISOString().split("T")[0], end_date: endDate.toISOString().split("T")[0], color: selectedColor }]);
+      const payload = { user_id: user.id, title: title.trim(), target_amount: Number(amount), current_amount: goal?.current_amount || 0, start_date: startDate.toISOString().split("T")[0], end_date: endDate.toISOString().split("T")[0], color: selectedColor };
+      const { error } = isEditMode
+        ? await supabase.from("goals").update(payload).eq("id", goal.id).eq("user_id", user.id)
+        : await supabase.from("goals").insert([payload]);
       if (error) throw error;
-      Alert.alert("Success", "Goal added successfully.");
+      Alert.alert("Success", isEditMode ? "Goal updated successfully." : "Goal added successfully.");
       navigation.goBack();
     } catch (error) {
-      Alert.alert("Error", error.message || "Could not save goal.");
+      Alert.alert("Error", error.message || `Could not ${isEditMode ? "update" : "save"} goal.`);
     } finally {
       setSaving(false);
     }
@@ -44,7 +61,7 @@ export default function AddGoalScreen({ navigation }) {
 
   return (
     <SafeAreaView style={formStyles.container}>
-      <ScreenHeader title="Add goal" />
+      <ScreenHeader title={isEditMode ? "Update goal" : "Add goal"} />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={formStyles.content}>
         <View style={formStyles.inlineField}>
           <View style={formStyles.leadingIcon}>
@@ -68,7 +85,7 @@ export default function AddGoalScreen({ navigation }) {
       </ScrollView>
       <Pressable style={formStyles.saveButton} onPress={saveGoal} disabled={saving}>
         <MaterialCommunityIcons name="content-save-outline" size={24} color="#2f1814" />
-        <Text style={formStyles.saveButtonText}>{saving ? "Saving..." : "Add"}</Text>
+        <Text style={formStyles.saveButtonText}>{saving ? "Saving..." : isEditMode ? "Update" : "Add"}</Text>
       </Pressable>
       {pickerConfig ? <DateTimePicker value={pickerConfig.value} mode={pickerConfig.mode} display="default" onChange={(_, pickedDate) => { if (!pickedDate) return setPickerConfig(null); if (pickerConfig.field === "start") setStartDate(pickedDate); else setEndDate(pickedDate); setPickerConfig(null); }} /> : null}
     </SafeAreaView>

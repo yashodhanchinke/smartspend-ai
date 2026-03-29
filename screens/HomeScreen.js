@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import CalendarHeatmap from "../components/CalendarHeatmap";
+import TransactionListItem from "../components/TransactionListItem";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 import { showTransactionEntryOptions } from "../util/transactionEntry";
@@ -214,18 +215,28 @@ export default function HomeScreen({ navigation, route }) {
 
     /* RECENT TRANSACTIONS */
 
-    const { data: tx } = await supabase
-      .from("transactions")
-      .select(`
-        *,
-        categories(name,icon,color),
-        accounts(name)
-      `)
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(5);
+    const [{ data: tx }, { data: accountRows }] = await Promise.all([
+      supabase
+        .from("transactions")
+        .select(`
+          *,
+          categories(name,icon,color)
+        `)
+        .eq("user_id", user.id)
+        .order("date", { ascending: false })
+        .order("time", { ascending: false })
+        .limit(5),
+      supabase.from("accounts").select("id,name").eq("user_id", user.id),
+    ]);
 
-    setTransactions(tx || []);
+    const accountMap = Object.fromEntries((accountRows || []).map((account) => [account.id, account]));
+
+    setTransactions(
+      (tx || []).map((transaction) => ({
+        ...transaction,
+        account: accountMap[transaction.account_id] || null,
+      }))
+    );
 
     const { data: weeklySourceTransactions } = await supabase
       .from("transactions")
@@ -617,51 +628,22 @@ export default function HomeScreen({ navigation, route }) {
             </Text>
           )}
 
-          {transactions.map((t) => (
-
-            <View key={t.id} style={styles.txRow}>
-
-              <View style={styles.txLeft}>
-
-                <View
-                  style={[
-                    styles.txIcon,
-                    { backgroundColor: t.categories?.color || "#a05c3b" }
-                  ]}
-                >
-                  <MaterialCommunityIcons
-                    name={t.categories?.icon || "credit-card"}
-                    size={18}
-                    color="#fff"
-                  />
-                </View>
-
-                <View>
-
-                  <Text style={styles.txTitle}>
-                    {t.title || t.categories?.name || "Transaction"}
-                  </Text>
-
-                  <Text style={styles.txMeta}>
-                    {t.accounts?.name || "Account"} • {t.date}
-                  </Text>
-
-                </View>
-
-              </View>
-
-              <Text
-                style={
-                  t.type === "expense"
-                    ? styles.txExpense
-                    : styles.txIncome
-                }
-              >
-                ₹{Number(t.amount).toFixed(2)}
-              </Text>
-
-            </View>
-
+          {transactions.map((t, index) => (
+            <TransactionListItem
+              key={t.id}
+              title={t.title || t.categories?.name || "Transaction"}
+              accountLabel={t.account?.name || "Account"}
+              dateLabel={parseStoredDate(t.date).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+              })}
+              amount={t.amount}
+              time={t.time}
+              transactionType={t.type}
+              categoryColor={t.categories?.color || "#a05c3b"}
+              categoryIcon={t.categories?.icon || "credit-card"}
+              showDivider={index !== transactions.length - 1}
+            />
           ))}
 
         </View>

@@ -16,12 +16,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import ScreenHeader from "../components/ScreenHeader";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
-import { saveTransaction } from "../util/saveTransaction";
+import { saveTransaction, updateTransaction } from "../util/saveTransaction";
 
 export default function AddTransactionScreen({ navigation, route }) {
+  const transaction = route?.params?.transaction || null;
+  const isEditMode = route?.name === "UpdateTransaction" || Boolean(transaction?.id);
+  const screenTitle = isEditMode ? "Update Transaction" : "Add Transaction";
+  const saveLabel = isEditMode ? "Update" : "Add";
 
   const [type, setType] = useState("expense");
-
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const description = "";
@@ -39,10 +42,39 @@ export default function AddTransactionScreen({ navigation, route }) {
 
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (!transaction) {
+      if (route?.params?.date) {
+        const [year, month, day] = String(route.params.date).split("-").map(Number);
+        setDate(new Date(year || 2000, (month || 1) - 1, day || 1));
+      }
+      return;
+    }
+
+    setType(transaction.type || "expense");
+    setTitle(transaction.title || "");
+    setAmount(String(transaction.amount ?? ""));
+
+    const baseDate = transaction.date
+      ? new Date(`${transaction.date}T${transaction.time || "00:00:00"}`)
+      : new Date();
+    setDate(baseDate);
+  }, [route?.params?.date, transaction]);
+
   const fetchAccounts = useCallback(async () => {
     const { data } = await supabase.from("accounts").select("*");
     const nextAccounts = data || [];
     setAccounts(nextAccounts);
+
+    if (transaction) {
+      setSelectedAccount(
+        nextAccounts.find((account) => account.id === transaction.account_id) || null
+      );
+      setTransferAccount(
+        nextAccounts.find((account) => account.id === transaction.to_account_id) || null
+      );
+      return;
+    }
 
     const preselectedAccountId = route?.params?.accountId;
 
@@ -53,7 +85,7 @@ export default function AddTransactionScreen({ navigation, route }) {
         setSelectedAccount(matchedAccount);
       }
     }
-  }, [route?.params?.accountId]);
+  }, [route?.params?.accountId, transaction]);
 
   const fetchCategories = useCallback(async () => {
     const { data } = await supabase
@@ -61,8 +93,15 @@ export default function AddTransactionScreen({ navigation, route }) {
       .select("*")
       .eq("type", type);
 
-    setCategories(data || []);
-  }, [type]);
+    const nextCategories = data || [];
+    setCategories(nextCategories);
+
+    if (transaction && type !== "transfer") {
+      setSelectedCategory(
+        nextCategories.find((category) => category.id === transaction.category_id) || null
+      );
+    }
+  }, [transaction, type]);
 
   /* ================= LOAD DATA ================= */
 
@@ -73,6 +112,18 @@ export default function AddTransactionScreen({ navigation, route }) {
   useEffect(() => {
     if (type !== "transfer") fetchCategories();
   }, [fetchCategories, type]);
+
+  useEffect(() => {
+    if (type === "transfer") {
+      setSelectedCategory(null);
+    } else if (transaction?.type !== type) {
+      setSelectedCategory(null);
+    }
+
+    if (type !== "transfer" && transaction?.type === "transfer") {
+      setTransferAccount(null);
+    }
+  }, [transaction?.type, type]);
 
   /* ================= DATE HANDLERS ================= */
 
@@ -119,7 +170,7 @@ export default function AddTransactionScreen({ navigation, route }) {
     } = await supabase.auth.getUser();
 
     try {
-      await saveTransaction({
+      const payload = {
         userId: user.id,
         type,
         title,
@@ -130,7 +181,16 @@ export default function AddTransactionScreen({ navigation, route }) {
         accountId: selectedAccount.id,
         categoryId: type === "transfer" ? null : selectedCategory.id,
         toAccountId: type === "transfer" ? transferAccount.id : null,
-      });
+      };
+
+      if (isEditMode) {
+        await updateTransaction({
+          transactionId: transaction.id,
+          ...payload,
+        });
+      } else {
+        await saveTransaction(payload);
+      }
     } catch (error) {
       Alert.alert("Error", error.message);
       setLoading(false);
@@ -139,7 +199,7 @@ export default function AddTransactionScreen({ navigation, route }) {
 
     setLoading(false);
 
-    Alert.alert("Success 🎉", "Transaction added");
+    Alert.alert("Success", isEditMode ? "Transaction updated" : "Transaction added");
     navigation.goBack();
   };
 
@@ -147,14 +207,20 @@ export default function AddTransactionScreen({ navigation, route }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScreenHeader title="Add Transaction" />
+      <ScreenHeader title={screenTitle} />
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.heroCard}>
-          <Text style={styles.heroEyebrow}>Create a new entry</Text>
-          <Text style={styles.heroTitle}>Track money clearly</Text>
+          <Text style={styles.heroEyebrow}>
+            {isEditMode ? "Change this entry" : "Create a new entry"}
+          </Text>
+          <Text style={styles.heroTitle}>
+            {isEditMode ? "Update money details" : "Track money clearly"}
+          </Text>
           <Text style={styles.heroSubtitle}>
-            Choose the type, fill the details, then assign the right account and category.
+            {isEditMode
+              ? "Update the type, amount, account, and category for this transaction."
+              : "Choose the type, fill the details, then assign the right account and category."}
           </Text>
         </View>
 
@@ -324,7 +390,7 @@ export default function AddTransactionScreen({ navigation, route }) {
 
         <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
           <Text style={styles.saveText}>
-            {loading ? "Saving..." : "Add"}
+            {loading ? "Saving..." : saveLabel}
           </Text>
         </TouchableOpacity>
       </ScrollView>

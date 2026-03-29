@@ -1,7 +1,7 @@
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import FloatingButton from "../components/FloatingButton";
 import ScreenHeader from "../components/ScreenHeader";
@@ -37,10 +37,14 @@ export default function LabelsScreen({ navigation }) {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
           <View style={styles.wrap}>
             {labels.map((label) => (
-              <View key={label.id} style={[styles.chip, { borderColor: label.color || "#ffb49a" }]}>
+              <Pressable
+                key={label.id}
+                style={[styles.chip, { borderColor: label.color || "#ffb49a" }]}
+                onPress={() => navigation.navigate("UpdateLabel", { label })}
+              >
                 <View style={[styles.dot, { backgroundColor: label.color || "#ffb49a" }]} />
                 <Text style={styles.chipText}>{label.name}</Text>
-              </View>
+              </Pressable>
             ))}
           </View>
         </ScrollView>

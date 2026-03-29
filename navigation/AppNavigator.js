@@ -142,24 +142,32 @@ export default function AppNavigator() {
             <Stack.Screen name="Main" component={BottomTabs} />
 
             <Stack.Screen name="AddTransaction" component={AddTransactionScreen} />
+            <Stack.Screen name="UpdateTransaction" component={AddTransactionScreen} />
             <Stack.Screen name="Categories" component={CategoriesScreen} />
             <Stack.Screen name="Calendar Heatmap" component={CalendarHeatmapScreen} />
             <Stack.Screen name="CategoryDetails" component={CategoryDetailsScreen} />
 
             <Stack.Screen name="Budgets" component={BudgetsScreen} />
             <Stack.Screen name="AddBudget" component={AddBudgetScreen} />
+            <Stack.Screen name="UpdateBudget" component={AddBudgetScreen} />
             <Stack.Screen name="Goals" component={GoalsScreen} />
             <Stack.Screen name="Labels" component={LabelsScreen} />
             <Stack.Screen name="Loans" component={LoansScreen} />
             <Stack.Screen name="Recurring" component={RecurringScreen} />
             <Stack.Screen name="AddGoal" component={AddGoalScreen} />
+            <Stack.Screen name="UpdateGoal" component={AddGoalScreen} />
             <Stack.Screen name="AddLabel" component={AddLabelScreen} />
+            <Stack.Screen name="UpdateLabel" component={AddLabelScreen} />
             <Stack.Screen name="AddLoan" component={AddLoanScreen} />
+            <Stack.Screen name="UpdateLoan" component={AddLoanScreen} />
             <Stack.Screen name="AddRecurring" component={AddRecurringScreen} />
+            <Stack.Screen name="UpdateRecurring" component={AddRecurringScreen} />
             <Stack.Screen name="Analytics" component={AnalyticsScreen} />
             <Stack.Screen name="Weekly Summary" component={TransactionsScreen} />
             <Stack.Screen name="AddCategory" component={AddCategoryScreen} />
+            <Stack.Screen name="UpdateCategory" component={AddCategoryScreen} />
             <Stack.Screen name="AddAccount" component={AddAccountScreen} />
+            <Stack.Screen name="UpdateAccount" component={AddAccountScreen} />
             <Stack.Screen name="ReceiptScan" component={ReceiptScanScreen} />
 
           </>

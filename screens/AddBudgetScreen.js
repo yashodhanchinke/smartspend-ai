@@ -145,7 +145,9 @@ function CategorySection({
   );
 }
 
-export default function AddBudgetScreen({ navigation }) {
+export default function AddBudgetScreen({ navigation, route }) {
+  const budget = route?.params?.budget || null;
+  const isEditMode = route?.name === "UpdateBudget" || Boolean(budget?.id);
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
@@ -200,6 +202,25 @@ export default function AddBudgetScreen({ navigation }) {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!budget) {
+      return;
+    }
+
+    const linkedCategoryIds = (budget.budget_categories || [])
+      .map((item) => item.category_id || item.categories?.id)
+      .filter(Boolean);
+
+    setName(budget.name || "");
+    setAmount(String(budget.amount ?? ""));
+    setNotes(budget.notes || "");
+    setSelectedCategoryIds(linkedCategoryIds);
+    setBudgetMode(budget.mode || "automatic");
+    setBudgetType(budget.budget_type || "category");
+    setBudgetPeriod(budget.period || "monthly");
+    setSelectedColor(budget.color || "#FF4433");
+  }, [budget]);
 
   const manualCategoryCount = selectedCategoryIds.length;
   const expenseCategories = categories.filter((item) => item.type === "expense");
@@ -266,14 +287,38 @@ export default function AddBudgetScreen({ navigation }) {
         color: selectedColor,
       };
 
-      const { data: insertedBudget, error: budgetError } = await supabase
-        .from("budgets")
-        .insert([budgetPayload])
-        .select("id")
-        .single();
+      const budgetQuery = isEditMode
+        ? supabase
+            .from("budgets")
+            .update({
+              ...budgetPayload,
+              spent: Number(budget.spent || 0),
+            })
+            .eq("id", budget.id)
+            .eq("user_id", user.id)
+            .select("id")
+            .single()
+        : supabase
+            .from("budgets")
+            .insert([budgetPayload])
+            .select("id")
+            .single();
+
+      const { data: insertedBudget, error: budgetError } = await budgetQuery;
 
       if (budgetError) {
         throw budgetError;
+      }
+
+      if (isEditMode) {
+        const { error: deleteRelationsError } = await supabase
+          .from("budget_categories")
+          .delete()
+          .eq("budget_id", insertedBudget.id);
+
+        if (deleteRelationsError) {
+          throw deleteRelationsError;
+        }
       }
 
       if (effectiveCategoryIds.length > 0) {
@@ -291,6 +336,7 @@ export default function AddBudgetScreen({ navigation }) {
         }
       }
 
+      Alert.alert("Success", isEditMode ? "Budget updated." : "Budget added.");
       navigation.goBack();
     } catch (error) {
       Alert.alert("Error", error.message || "Could not save budget.");
@@ -301,7 +347,7 @@ export default function AddBudgetScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScreenHeader title="Add budget" />
+      <ScreenHeader title={isEditMode ? "Update budget" : "Add budget"} />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
         <View style={styles.inlineField}>
@@ -371,7 +417,7 @@ export default function AddBudgetScreen({ navigation }) {
 
       <Pressable style={styles.saveButton} onPress={handleSave} disabled={saving}>
         <MaterialCommunityIcons name="content-save-outline" size={24} color="#2f1814" />
-        <Text style={styles.saveButtonText}>{saving ? "Saving..." : "Add"}</Text>
+        <Text style={styles.saveButtonText}>{saving ? "Saving..." : isEditMode ? "Update" : "Add"}</Text>
       </Pressable>
 
       <SelectionModal

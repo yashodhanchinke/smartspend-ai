@@ -11,8 +11,14 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import TransactionListItem from "../components/TransactionListItem";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
+
+const parseStoredDate = (value) => {
+  const [year, month, day] = String(value || "").split("-").map(Number);
+  return new Date(year || 2000, (month || 1) - 1, day || 1);
+};
 
 export default function CategoryDetailsScreen({ navigation }) {
   const route = useRoute();
@@ -20,25 +26,40 @@ export default function CategoryDetailsScreen({ navigation }) {
 
   const [transactions, setTransactions] = useState([]);
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchTransactions();
-    }, [])
-  );
-
-  const fetchTransactions = async () => {
+  const fetchTransactions = useCallback(async () => {
     const { data: userData } = await supabase.auth.getUser();
     const user = userData?.user;
     if (!user) return;
 
-    const { data } = await supabase
-      .from("transactions")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("category_id", category.id);
+    const [{ data }, { data: accountRows }] = await Promise.all([
+      supabase
+        .from("transactions")
+        .select(`
+          *,
+          categories(name,color,icon)
+        `)
+        .eq("user_id", user.id)
+        .eq("category_id", category.id)
+        .order("date", { ascending: false })
+        .order("time", { ascending: false }),
+      supabase.from("accounts").select("id,name").eq("user_id", user.id),
+    ]);
 
-    setTransactions(data || []);
-  };
+    const accountMap = Object.fromEntries((accountRows || []).map((account) => [account.id, account]));
+
+    setTransactions(
+      (data || []).map((transaction) => ({
+        ...transaction,
+        account: accountMap[transaction.account_id] || null,
+      }))
+    );
+  }, [category.id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchTransactions();
+    }, [fetchTransactions])
+  );
 
   const total = transactions.reduce(
     (sum, t) => sum + Number(t.amount),
@@ -54,7 +75,9 @@ export default function CategoryDetailsScreen({ navigation }) {
 
         <Text style={styles.headerTitle}>{category.name}</Text>
 
-        <View style={{ width: 26 }} />
+        <TouchableOpacity onPress={() => navigation.navigate("UpdateCategory", { category })}>
+          <Feather name="edit-2" size={22} color={colors.text} />
+        </TouchableOpacity>
       </View>
 
       <View style={styles.summaryCard}>
@@ -68,11 +91,22 @@ export default function CategoryDetailsScreen({ navigation }) {
         {transactions.length === 0 ? (
           <Text style={styles.noData}>No transactions found</Text>
         ) : (
-          transactions.map((item) => (
-            <View key={item.id} style={styles.row}>
-              <Text style={styles.categoryLabel}>{item.title}</Text>
-              <Text style={styles.amount}>₹{item.amount}</Text>
-            </View>
+          transactions.map((item, index) => (
+            <TransactionListItem
+              key={item.id}
+              title={item.title || item.categories?.name || "Transaction"}
+              accountLabel={item.account?.name || "Account"}
+              dateLabel={parseStoredDate(item.date).toLocaleDateString("en-US", {
+                month: "short",
+                day: "numeric",
+              })}
+              amount={item.amount}
+              time={item.time}
+              transactionType={item.type}
+              categoryColor={item.categories?.color || category.color}
+              categoryIcon={item.categories?.icon || category.icon}
+              showDivider={index !== transactions.length - 1}
+            />
           ))
         )}
       </ScrollView>
@@ -118,22 +152,4 @@ const styles = StyleSheet.create({
     marginTop: 40,
   },
 
-  row: {
-    backgroundColor: colors.card,
-    padding: 16,
-    borderRadius: 18,
-    marginBottom: 12,
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-
-  categoryLabel: {
-    color: colors.text,
-    fontWeight: "600",
-  },
-
-  amount: {
-    fontWeight: "700",
-    color: colors.text,
-  },
 });

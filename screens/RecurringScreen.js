@@ -1,7 +1,7 @@
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useState } from "react";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import FloatingButton from "../components/FloatingButton";
 import ScreenHeader from "../components/ScreenHeader";
@@ -20,7 +20,7 @@ export default function RecurringScreen({ navigation }) {
     if (!user) return setItems([]);
     const { data } = await supabase
       .from("recurring_transactions")
-      .select("id,title,amount,type,period,next_run,accounts(name),categories(name)")
+      .select("id,title,amount,type,period,next_run,account_id,category_id,accounts(name),categories(name)")
       .eq("user_id", user.id)
       .order("next_run");
     setItems(data || []);
@@ -40,7 +40,11 @@ export default function RecurringScreen({ navigation }) {
       ) : (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
           {items.map((item) => (
-            <View key={item.id} style={styles.card}>
+            <Pressable
+              key={item.id}
+              style={styles.card}
+              onPress={() => navigation.navigate("UpdateRecurring", { recurring: item })}
+            >
               <View style={styles.row}>
                 <Text style={styles.cardTitle}>{item.title || "Recurring transaction"}</Text>
                 <View style={[styles.typePill, item.type === "income" && styles.typePillIncome]}>
@@ -54,7 +58,7 @@ export default function RecurringScreen({ navigation }) {
               <Text style={styles.cardSub}>
                 {(item.accounts?.name || "No account")} • {(item.categories?.name || "No category")}
               </Text>
-            </View>
+            </Pressable>
           ))}
         </ScrollView>
       )}

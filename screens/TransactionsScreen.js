@@ -1,4 +1,3 @@
-import { MaterialCommunityIcons } from "@expo/vector-icons";
 import Feather from "@expo/vector-icons/Feather";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useMemo, useState } from "react";
@@ -10,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import TransactionListItem from "../components/TransactionListItem";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 
@@ -71,21 +71,6 @@ const formatCurrency = (value) => {
   if (amount < 0) return `-₹${absoluteAmount}`;
   if (amount > 0) return `₹${absoluteAmount}`;
   return "₹0.00";
-};
-
-const formatTransactionAmount = (transaction) => {
-  const amount = Number(transaction.amount || 0).toFixed(2);
-
-  if (transaction.type === "expense") return `₹${amount}`;
-  if (transaction.type === "income") return `₹${amount}`;
-
-  return `₹${amount}`;
-};
-
-const getTransactionAmountStyle = (transaction) => {
-  if (transaction.type === "expense") return styles.amountExpense;
-  if (transaction.type === "income") return styles.amountIncome;
-  return styles.amountNeutral;
 };
 
 const formatSectionTitle = (tab, date) => {
@@ -169,17 +154,20 @@ export default function TransactionsScreen({ navigation, route }) {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("transactions")
-      .select(`
-        *,
-        categories(name,icon,color),
-        accounts(name),
-        to_account:to_account_id(name)
-      `)
-      .eq("user_id", user.id)
-      .order("date", { ascending: false })
-      .order("created_at", { ascending: false });
+    const [{ data, error }, { data: accountRows }] = await Promise.all([
+      supabase
+        .from("transactions")
+        .select(`
+          *,
+          categories(name,icon,color),
+          to_account:to_account_id(name)
+        `)
+        .eq("user_id", user.id)
+        .order("date", { ascending: false })
+        .order("time", { ascending: false }),
+      supabase.from("accounts").select("id,name").eq("user_id", user.id),
+      supabase.from("accounts").select("id,name").eq("user_id", user.id),
+    ]);
 
     if (error) {
       console.warn("Could not load transactions:", error.message);
@@ -187,7 +175,14 @@ export default function TransactionsScreen({ navigation, route }) {
       return;
     }
 
-    setTransactions(data || []);
+    const accountMap = Object.fromEntries((accountRows || []).map((account) => [account.id, account]));
+
+    setTransactions(
+      (data || []).map((transaction) => ({
+        ...transaction,
+        account: accountMap[transaction.account_id] || null,
+      }))
+    );
   }, []);
 
   useFocusEffect(
@@ -270,57 +265,22 @@ export default function TransactionsScreen({ navigation, route }) {
                 {group.items.map((item, index) => {
                   const accountLabel =
                     item.type === "transfer"
-                      ? `${item.accounts?.name || "Account"} to ${item.to_account?.name || "Account"}`
-                      : item.accounts?.name || item.categories?.name || "Account";
+                      ? `${item.account?.name || "Account"}`
+                      : item.account?.name || item.categories?.name || "Account";
 
                   return (
-                    <View
+                    <TransactionListItem
                       key={item.id}
-                      style={[
-                        styles.row,
-                        index !== group.items.length - 1 && styles.rowBorder,
-                      ]}
-                    >
-                      <View style={styles.left}>
-                        <View
-                          style={[
-                            styles.iconBox,
-                            { backgroundColor: item.categories?.color || "#5a4138" },
-                          ]}
-                        >
-                          <MaterialCommunityIcons
-                            name={item.categories?.icon || "credit-card-outline"}
-                            size={20}
-                            color="#fdf1ea"
-                          />
-                        </View>
-
-                        <View style={styles.textWrap}>
-                          <Text style={styles.category} numberOfLines={1}>
-                            {item.title || item.categories?.name || "Transaction"}
-                          </Text>
-
-                          <Text style={styles.sub} numberOfLines={1}>
-                            {accountLabel} • {getTransactionDateLabel(item.date)}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.amountWrap}>
-                        <Text style={[styles.amount, getTransactionAmountStyle(item)]}>
-                          {formatTransactionAmount(item)}
-                        </Text>
-
-                        <Text style={styles.sub}>
-                          {item.time
-                            ? new Date(`2000-01-01T${item.time}`).toLocaleTimeString("en-US", {
-                                hour: "numeric",
-                                minute: "2-digit",
-                              })
-                            : "--:--"}
-                        </Text>
-                      </View>
-                    </View>
+                      title={item.title || item.categories?.name || "Transaction"}
+                      accountLabel={accountLabel}
+                      dateLabel={getTransactionDateLabel(item.date)}
+                      amount={item.amount}
+                      time={item.time}
+                      transactionType={item.type}
+                      categoryColor={item.categories?.color || "#5a4138"}
+                      categoryIcon={item.categories?.icon || "credit-card-outline"}
+                      showDivider={index !== group.items.length - 1}
+                    />
                   );
                 })}
               </View>
@@ -431,72 +391,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderRadius: 24,
     overflow: "hidden",
-  },
-
-  row: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-  },
-
-  rowBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255, 233, 220, 0.08)",
-  },
-
-  left: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-    marginRight: 12,
-  },
-
-  iconBox: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
-  },
-
-  textWrap: {
-    flex: 1,
-  },
-
-  category: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: "700",
-  },
-
-  sub: {
-    color: "#cdb8ae",
-    fontSize: 12,
-    marginTop: 4,
-  },
-
-  amountWrap: {
-    alignItems: "flex-end",
-  },
-
-  amount: {
-    fontSize: 16,
-    fontWeight: "800",
-  },
-
-  amountExpense: {
-    color: "#ff7f76",
-  },
-
-  amountIncome: {
-    color: "#7be68c",
-  },
-
-  amountNeutral: {
-    color: "#e9d8cf",
   },
 
   tabBar: {
