@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { StyleSheet, Text, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import AccountsScreen from "../screens/AccountsScreen";
 import HomeScreen from "../screens/HomeScreen";
@@ -31,12 +32,14 @@ function TabIcon({ icon, label, focused }) {
 }
 
 export default function BottomTabs() {
+  const insets = useSafeAreaInsets();
+
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
         tabBarShowLabel: false,
-        tabBarStyle: styles.tabBar,
+        tabBarStyle: [styles.tabBar, { height: 72 + insets.bottom, paddingBottom: 6 + insets.bottom }],
       }}
     >
       <Tab.Screen

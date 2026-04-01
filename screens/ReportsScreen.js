@@ -4,6 +4,7 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Dimensions,
   Modal,
   Pressable,
@@ -1026,6 +1027,40 @@ export default function ReportsScreen() {
   const [draftCategoryIds, setDraftCategoryIds] = useState([]);
   const [draftStartDate, setDraftStartDate] = useState(currentBounds.start);
   const [draftEndDate, setDraftEndDate] = useState(currentBounds.end);
+  const [isRequestingReport, setIsRequestingReport] = useState(false);
+
+  const handleRequestReport = async () => {
+    setIsRequestingReport(true);
+    try {
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !session?.access_token) {
+        throw new Error("You must be logged in to request a report.");
+      }
+
+      const monthStr = selectedPeriod ? selectedPeriod.date.toISOString().substring(0, 7) : new Date().toISOString().substring(0, 7);
+      const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
+      
+      const response = await fetch(`${API_URL}/api/monthly-report`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`
+        },
+        body: JSON.stringify({ month: monthStr })
+      });
+
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.error || "Failed to generate report.");
+      }
+
+      Alert.alert("Success", `Your monthly report for ${monthStr} has been emailed to you!`);
+    } catch (e) {
+      Alert.alert("Error", e.message || "An error occurred while requesting your report.");
+    } finally {
+      setIsRequestingReport(false);
+    }
+  };
 
   const loadData = useCallback(async () => {
     const {
@@ -1420,6 +1455,17 @@ export default function ReportsScreen() {
         {SECTION_CARDS.map((item) => (
           <ReportFeatureCard key={item.key} item={item} />
         ))}
+
+        <Pressable 
+          style={styles.requestReportButton} 
+          onPress={handleRequestReport}
+          disabled={isRequestingReport}
+        >
+          <MaterialCommunityIcons name="email-fast" size={24} color="#2f1814" />
+          <Text style={styles.requestReportButtonText}>
+            {isRequestingReport ? "Generating Report..." : "Email My Monthly Report"}
+          </Text>
+        </Pressable>
       </ScrollView>
 
       <Pressable style={styles.floatingFilter} onPress={openFilters}>
@@ -1995,5 +2041,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
     marginTop: 10,
+  },
+  requestReportButton: {
+    backgroundColor: "#ffb49a",
+    borderRadius: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 18,
+    marginTop: 24,
+    gap: 12,
+  },
+  requestReportButtonText: {
+    color: "#2f1814",
+    fontSize: 18,
+    fontWeight: "800",
   },
 });

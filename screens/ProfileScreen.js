@@ -17,7 +17,7 @@ import colors from "../theme/colors";
 export default function ProfileScreen() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
+  const [authEmail, setAuthEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
 
@@ -42,13 +42,13 @@ export default function ProfileScreen() {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("name,email,phone")
+      .select("name,email")
       .eq("id", user.id)
       .maybeSingle();
 
     setFullName(profile?.name || user.user_metadata?.name || "");
-    setEmail(profile?.email || user.email || "");
-    setPhone(profile?.phone || "");
+    setAuthEmail((user.email || "").trim());
+    setEmail((user.email || profile?.email || "").trim());
   }, []);
 
   useFocusEffect(
@@ -75,11 +75,28 @@ export default function ProfileScreen() {
       return;
     }
 
+    const desiredEmail = email.trim().toLowerCase();
+    const currentAuthEmail = (user.email || "").trim().toLowerCase();
+    let emailChangeRequested = false;
+
+    if (desiredEmail !== currentAuthEmail) {
+      const { error: authUpdateError } = await supabase.auth.updateUser({
+        email: desiredEmail,
+      });
+
+      if (authUpdateError) {
+        setLoading(false);
+        Alert.alert("Error", authUpdateError.message);
+        return;
+      }
+
+      emailChangeRequested = true;
+    }
+
     const payload = {
       id: user.id,
       name: fullName.trim(),
-      email: email.trim(),
-      phone: phone.trim(),
+      email: desiredEmail,
     };
 
     const { error } = await supabase.from("profiles").upsert(payload);
@@ -88,6 +105,15 @@ export default function ProfileScreen() {
 
     if (error) {
       Alert.alert("Error", error.message);
+      return;
+    }
+
+    if (emailChangeRequested) {
+      setAuthEmail(desiredEmail);
+      Alert.alert(
+        "Success",
+        "Profile updated. Please confirm the email-change link sent by Supabase to complete login-email update."
+      );
       return;
     }
 
@@ -166,17 +192,7 @@ export default function ProfileScreen() {
             />
           </View>
 
-          <View style={styles.inputCard}>
-            <Text style={styles.label}>Phone</Text>
-            <TextInput
-              placeholder="Optional"
-              placeholderTextColor="#8e766c"
-              style={styles.input}
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-            />
-          </View>
+          {authEmail ? <Text style={styles.helperText}>Login email: {authEmail}</Text> : null}
         </View>
 
         <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={loading}>
@@ -305,6 +321,11 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     paddingVertical: 2,
+  },
+  helperText: {
+    color: "#baa095",
+    fontSize: 12,
+    marginTop: 4,
   },
   saveBtn: {
     backgroundColor: colors.gold,
