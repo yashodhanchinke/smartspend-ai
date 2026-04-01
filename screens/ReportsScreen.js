@@ -3,10 +3,13 @@ import Feather from "@expo/vector-icons/Feather";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Constants from "expo-constants";
+import * as WebBrowser from "expo-web-browser";
 import {
   Alert,
   Dimensions,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -27,6 +30,26 @@ const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS;
 const CHART_HEIGHT = 210;
 const CHART_TOP_PADDING = 16;
 const CHART_BOTTOM_PADDING = 28;
+
+function getApiBaseUrl() {
+  const configured = process.env.EXPO_PUBLIC_API_URL;
+  if (configured) return configured.replace(/\/+$/, "");
+
+  // In Expo Go / dev, default to the same LAN host as Metro.
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    Constants.expoConfig?.debuggerHost ||
+    Constants.manifest2?.extra?.expoClient?.hostUri;
+
+  if (typeof hostUri === "string" && hostUri.length) {
+    const host = hostUri.split(":")[0];
+    return `http://${host}:3000`;
+  }
+
+  // Fallbacks for common local dev environments.
+  if (Platform.OS === "android") return "http://10.0.2.2:3000";
+  return "http://localhost:3000";
+}
 const RANGE_OPTIONS = [
   { key: "daily", label: "Daily" },
   { key: "weekly", label: "Weekly" },
@@ -1028,8 +1051,10 @@ export default function ReportsScreen() {
   const [draftStartDate, setDraftStartDate] = useState(currentBounds.start);
   const [draftEndDate, setDraftEndDate] = useState(currentBounds.end);
   const [isRequestingReport, setIsRequestingReport] = useState(false);
+  const [lastReportUrl, setLastReportUrl] = useState(null);
+  const [generatedReports, setGeneratedReports] = useState([]);
 
-  const handleRequestReport = async () => {
+  const requestReport = async (payload, labelForHistory) => {
     setIsRequestingReport(true);
     try {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
@@ -1037,8 +1062,7 @@ export default function ReportsScreen() {
         throw new Error("You must be logged in to request a report.");
       }
 
-      const monthStr = selectedPeriod ? selectedPeriod.date.toISOString().substring(0, 7) : new Date().toISOString().substring(0, 7);
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
+      const API_URL = getApiBaseUrl();
       
       const response = await fetch(`${API_URL}/api/monthly-report`, {
         method: "POST",
@@ -1046,20 +1070,100 @@ export default function ReportsScreen() {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({ month: monthStr })
+        body: JSON.stringify({ ...payload, send_email: false })
       });
 
-      const json = await response.json();
-      if (!response.ok || !json.success) {
-        throw new Error(json.error || "Failed to generate report.");
+      const rawText = await response.text();
+      let json = null;
+      try {
+        json = rawText ? JSON.parse(rawText) : null;
+      } catch (parseError) {
+        json = null;
       }
 
-      Alert.alert("Success", `Your monthly report for ${monthStr} has been emailed to you!`);
+      if (!response.ok || !json?.success) {
+        const message =
+          json?.details ||
+          json?.error ||
+          (rawText && rawText.trim().length ? rawText : null) ||
+          `Request failed (${response.status}).`;
+        throw new Error(message);
+      }
+
+      const reportUrl = json?.report_url || null;
+      setLastReportUrl(reportUrl);
+
+      if (reportUrl) {
+        const absoluteUrl = reportUrl.startsWith("http")
+          ? reportUrl
+          : `${API_URL}${reportUrl.startsWith("/") ? "" : "/"}${reportUrl}`;
+
+        setGeneratedReports((current) => [
+          {
+            key: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            label: labelForHistory || "Generated report",
+            url: absoluteUrl,
+            createdAt: new Date().toISOString(),
+          },
+          ...current,
+        ]);
+
+        Alert.alert(
+          "Success",
+          `Your report is ready.`,
+          [
+            {
+              text: "View PDF",
+              onPress: async () => {
+                await WebBrowser.openBrowserAsync(absoluteUrl);
+              },
+            },
+            { text: "OK", style: "cancel" },
+          ]
+        );
+      } else {
+        Alert.alert("Success", "Your report was generated successfully.");
+      }
     } catch (e) {
       Alert.alert("Error", e.message || "An error occurred while requesting your report.");
     } finally {
       setIsRequestingReport(false);
     }
+  };
+
+  const handleRequestMonthlyReport = async () => {
+    const monthStr = selectedPeriod
+      ? selectedPeriod.date.toISOString().substring(0, 7)
+      : new Date().toISOString().substring(0, 7);
+    // Use the already-fetched data in this screen (no backend Supabase reads).
+    await requestReport(
+      {
+        report_label: `month-${monthStr}`,
+        transactions: periodTransactions,
+      },
+      `Monthly report (${monthStr})`
+    );
+  };
+
+  const handleRequestLast30DaysReport = async () => {
+    const end = new Date();
+    const start = new Date();
+    start.setDate(end.getDate() - 30);
+    const startKey = formatDateKey(start);
+    const endKey = formatDateKey(end);
+
+    const last30Transactions = transactions.filter(
+      (t) => t.date >= startKey && t.date <= endKey
+    );
+
+    // Use the already-fetched data in this screen (no backend Supabase reads).
+    await requestReport(
+      {
+        report_label: `last-30-days-${startKey}-to-${endKey}`,
+        transactions: last30Transactions,
+      },
+      "Last 30 days"
+    );
   };
 
   const loadData = useCallback(async () => {
@@ -1401,6 +1505,7 @@ export default function ReportsScreen() {
               </View>
             </>
           )}
+
         </View>
 
         <View style={styles.segmentShell}>
@@ -1456,16 +1561,66 @@ export default function ReportsScreen() {
           <ReportFeatureCard key={item.key} item={item} />
         ))}
 
-        <Pressable 
-          style={styles.requestReportButton} 
-          onPress={handleRequestReport}
-          disabled={isRequestingReport}
-        >
-          <MaterialCommunityIcons name="email-fast" size={24} color="#2f1814" />
-          <Text style={styles.requestReportButtonText}>
-            {isRequestingReport ? "Generating Report..." : "Email My Monthly Report"}
-          </Text>
-        </Pressable>
+        <View style={styles.reportActionsBottom}>
+          <View style={styles.reportActionsRow}>
+            <Pressable
+              style={[styles.requestReportButton, styles.reportActionPrimary]}
+              onPress={handleRequestLast30DaysReport}
+              disabled={isRequestingReport}
+            >
+              <MaterialCommunityIcons name="calendar-range" size={22} color="#2f1814" />
+              <Text style={styles.requestReportButtonText}>
+                {isRequestingReport ? "Generating..." : "Last 30 days"}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.requestReportButton, styles.reportActionSecondary]}
+              onPress={handleRequestMonthlyReport}
+              disabled={isRequestingReport}
+            >
+              <MaterialCommunityIcons name="file-pdf-box" size={22} color="#2f1814" />
+              <Text style={styles.requestReportButtonText}>
+                {isRequestingReport ? "Generating..." : "This month"}
+              </Text>
+            </Pressable>
+          </View>
+
+          {lastReportUrl ? (
+            <Pressable
+              style={styles.viewReportButton}
+              onPress={async () => {
+                await WebBrowser.openBrowserAsync(lastReportUrl);
+              }}
+            >
+              <MaterialCommunityIcons name="open-in-new" size={22} color="#f4e2d9" />
+              <Text style={styles.viewReportButtonText}>View last generated PDF</Text>
+            </Pressable>
+          ) : null}
+
+          {generatedReports.length ? (
+            <View style={styles.generatedReportsWrap}>
+              <Text style={styles.generatedReportsTitle}>Generated reports</Text>
+              {generatedReports.slice(0, 5).map((item) => (
+                <Pressable
+                  key={item.key}
+                  style={styles.generatedReportRow}
+                  onPress={async () => {
+                    await WebBrowser.openBrowserAsync(item.url);
+                  }}
+                >
+                  <MaterialCommunityIcons name="file-pdf-box" size={20} color="#ffb49a" />
+                  <View style={styles.generatedReportCopy}>
+                    <Text style={styles.generatedReportLabel}>{item.label}</Text>
+                    <Text style={styles.generatedReportMeta}>{new Date(item.createdAt).toLocaleString()}</Text>
+                  </View>
+                  <Feather name="chevron-right" size={18} color="#92766d" />
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+        </View>
+
       </ScrollView>
 
       <Pressable style={styles.floatingFilter} onPress={openFilters}>
@@ -2054,7 +2209,77 @@ const styles = StyleSheet.create({
   },
   requestReportButtonText: {
     color: "#2f1814",
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: "800",
+  },
+  reportActionsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 18,
+  },
+  reportActionsBottom: {
+    marginTop: 18,
+    marginBottom: 18,
+  },
+  reportActionPrimary: {
+    flex: 1,
+  },
+  reportActionSecondary: {
+    flex: 1,
+  },
+  viewReportButton: {
+    marginTop: 12,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#3f2a24",
+    backgroundColor: "#251612",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    gap: 10,
+  },
+  viewReportButtonText: {
+    color: "#f4e2d9",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  generatedReportsWrap: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: "#3f2a24",
+  },
+  generatedReportsTitle: {
+    color: "#f4e2d9",
+    fontSize: 16,
+    fontWeight: "900",
+    marginBottom: 10,
+  },
+  generatedReportRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    backgroundColor: "#251612",
+    borderWidth: 1,
+    borderColor: "#3f2a24",
+    marginBottom: 10,
+  },
+  generatedReportCopy: {
+    flex: 1,
+  },
+  generatedReportLabel: {
+    color: "#f4e2d9",
+    fontSize: 14,
+    fontWeight: "900",
+  },
+  generatedReportMeta: {
+    color: "#beaaa1",
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 2,
   },
 });
