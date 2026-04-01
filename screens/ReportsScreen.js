@@ -1052,7 +1052,9 @@ export default function ReportsScreen() {
   const [draftEndDate, setDraftEndDate] = useState(currentBounds.end);
   const [isRequestingReport, setIsRequestingReport] = useState(false);
   const [lastReportUrl, setLastReportUrl] = useState(null);
+  const [lastReportFilename, setLastReportFilename] = useState(null);
   const [generatedReports, setGeneratedReports] = useState([]);
+  const [profileEmail, setProfileEmail] = useState("");
 
   const requestReport = async (payload, labelForHistory) => {
     setIsRequestingReport(true);
@@ -1091,7 +1093,9 @@ export default function ReportsScreen() {
       }
 
       const reportUrl = json?.report_url || null;
+      const filename = json?.filename || null;
       setLastReportUrl(reportUrl);
+      setLastReportFilename(filename);
 
       if (reportUrl) {
         const absoluteUrl = reportUrl.startsWith("http")
@@ -1116,6 +1120,44 @@ export default function ReportsScreen() {
               text: "View PDF",
               onPress: async () => {
                 await WebBrowser.openBrowserAsync(absoluteUrl);
+              },
+            },
+            {
+              text: "Email PDF",
+              onPress: async () => {
+                try {
+                  if (!filename) {
+                    throw new Error("Missing report filename.");
+                  }
+                  const emailTo = (profileEmail || "").trim();
+                  if (!emailTo) {
+                    throw new Error("Email not found. Please set it in Profile.");
+                  }
+
+                  const { data: { session } } = await supabase.auth.getSession();
+                  if (!session?.access_token) {
+                    throw new Error("You must be logged in.");
+                  }
+
+                  const resp = await fetch(`${API_URL}/api/email-report`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "Authorization": `Bearer ${session.access_token}`,
+                    },
+                    body: JSON.stringify({ filename, email_to: emailTo }),
+                  });
+
+                  const t = await resp.text();
+                  const j = t ? JSON.parse(t) : null;
+                  if (!resp.ok || !j?.success) {
+                    throw new Error(j?.details || j?.error || "Failed to send email.");
+                  }
+
+                  Alert.alert("Sent", `Report emailed to ${emailTo}`);
+                } catch (err) {
+                  Alert.alert("Error", err.message || "Could not email report.");
+                }
               },
             },
             { text: "OK", style: "cancel" },
@@ -1175,8 +1217,16 @@ export default function ReportsScreen() {
       setTransactions([]);
       setAccounts([]);
       setCategories([]);
+      setProfileEmail("");
       return;
     }
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("email")
+      .eq("id", user.id)
+      .maybeSingle();
+    setProfileEmail(((user.email || profile?.email || "") + "").trim());
 
     const [{ data: txData, error: txError }, { data: accountData }, { data: categoryData }] = await Promise.all([
       supabase

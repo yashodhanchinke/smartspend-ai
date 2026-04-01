@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { supabase } from './supabase.js';
-import { generateAndSendReport } from './generateMonthlyReport.js';
+import { generateAndSendReport, sendExistingPdfEmail } from './generateMonthlyReport.js';
 
 const app = express();
 app.use(cors());
@@ -48,6 +48,43 @@ app.post('/api/monthly-report', async (req, res) => {
     res.json({ success: true, report_url: reportUrl, ...result });
   } catch (err) {
     console.error('Report error:', err);
+    res.status(500).json({ error: 'Internal server error', details: err.message });
+  }
+});
+
+app.post('/api/email-report', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return res.status(401).json({ error: 'Missing Authorization header' });
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) {
+      return res.status(401).json({ error: 'Invalid or expired token. ' + (error?.message || '') });
+    }
+
+    const { filename, email_to } = req.body || {};
+    if (!filename || !email_to) {
+      return res.status(400).json({ error: 'Missing filename or email_to' });
+    }
+
+    const safeUserId = String(user.id).replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (typeof filename !== 'string' || !filename.startsWith(`report-${safeUserId}-`) || !filename.endsWith('.pdf')) {
+      return res.status(403).json({ error: 'Not allowed' });
+    }
+
+    const result = await sendExistingPdfEmail({
+      filename,
+      toEmail: String(email_to).trim(),
+      subject: 'Your SmartSpend Report',
+      text: 'Attached is your report PDF from SmartSpend AI.',
+    });
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Email report error:', err);
     res.status(500).json({ error: 'Internal server error', details: err.message });
   }
 });

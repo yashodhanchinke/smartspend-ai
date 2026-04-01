@@ -3,10 +3,14 @@ import fs from 'fs';
 import { google } from 'googleapis';
 import path from 'path';
 import puppeteer from 'puppeteer';
+import { fileURLToPath } from 'url';
 import './config.js';
 import { supabase } from './supabase.js';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
@@ -16,7 +20,9 @@ const oauth2Client = new google.auth.OAuth2(
 
 let hasAuth = false;
 try {
-  const tokenContent = fs.readFileSync('token.json');
+  // Prefer drop-in token.json next to this file: backend/token.json
+  const tokenPath = path.join(__dirname, 'token.json');
+  const tokenContent = fs.readFileSync(tokenPath);
   oauth2Client.setCredentials(JSON.parse(tokenContent));
   hasAuth = true;
 } catch (err) {
@@ -80,7 +86,7 @@ async function generateInsightsJson({ prompt }) {
 
 function createRawMessage(to, subject, text, attachmentData, pdfName) {
   const boundary = `smartspend_boundary_${Date.now()}`;
-  const sender = process.env.GMAIL_SENDER_ADDRESS || 'me';
+  const sender = process.env.GMAIL_SENDER_ADDRESS || 'yashodhanchinke67@gmail.com';
 
   const parts = [
     `To: ${to}`,
@@ -115,6 +121,46 @@ function createRawMessage(to, subject, text, attachmentData, pdfName) {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
+}
+
+export async function sendExistingPdfEmail({ filename, toEmail, subject, text }) {
+  if (!hasAuth) {
+    throw new Error(
+      "Gmail API not configured. Add backend/token.json (recommended) or set GMAIL_REFRESH_TOKEN."
+    );
+  }
+  if (!filename || typeof filename !== 'string') {
+    throw new Error("Missing filename.");
+  }
+  if (!toEmail || typeof toEmail !== 'string') {
+    throw new Error("Missing recipient email.");
+  }
+
+  const safeName = path.basename(filename);
+  if (safeName !== filename) {
+    throw new Error("Invalid filename.");
+  }
+
+  const pdfPath = path.join(process.cwd(), 'reports', safeName);
+  if (!fs.existsSync(pdfPath)) {
+    throw new Error("Report file not found on server.");
+  }
+
+  const fileData = fs.readFileSync(pdfPath);
+  const rawMessage = createRawMessage(
+    toEmail,
+    subject || "Your SmartSpend Report",
+    text || "Attached is your requested report PDF.",
+    fileData,
+    safeName
+  );
+
+  await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw: rawMessage }
+  });
+
+  return { email_status: 'success' };
 }
 
 /**
