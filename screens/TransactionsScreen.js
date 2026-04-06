@@ -1,4 +1,5 @@
 import Feather from "@expo/vector-icons/Feather";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useMemo, useState } from "react";
 import {
@@ -15,12 +16,16 @@ import colors from "../theme/colors";
 
 const TABS = ["Daily", "Weekly", "Monthly", "Yearly"];
 const parseStoredDate = (value) => {
+  if (value instanceof Date) {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+  }
+
   const [year, month, day] = String(value || "").split("-").map(Number);
   return new Date(year || 2000, (month || 1) - 1, day || 1);
 };
 
 const formatDateKey = (value) => {
-  const date = new Date(value);
+  const date = value instanceof Date ? value : parseStoredDate(value);
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
@@ -35,7 +40,9 @@ const getStartOfDay = (value) => {
 
 const getStartOfWeek = (value) => {
   const date = getStartOfDay(value);
-  date.setDate(date.getDate() - date.getDay());
+  const day = date.getDay(); // 0=Sun, 1=Mon, ...
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diffToMonday);
   return date;
 };
 
@@ -46,12 +53,12 @@ const getEndOfWeek = (value) => {
 };
 
 const getStartOfMonth = (value) => {
-  const date = new Date(value);
+  const date = parseStoredDate(value);
   return new Date(date.getFullYear(), date.getMonth(), 1);
 };
 
 const getStartOfYear = (value) => {
-  const date = new Date(value);
+  const date = parseStoredDate(value);
   return new Date(date.getFullYear(), 0, 1);
 };
 
@@ -74,7 +81,7 @@ const formatCurrency = (value) => {
 };
 
 const formatSectionTitle = (tab, date) => {
-  const current = new Date(date);
+  const current = parseStoredDate(date);
 
   if (tab === "Daily") {
     return current.toLocaleDateString("en-US", {
@@ -108,21 +115,22 @@ const formatSectionTitle = (tab, date) => {
 };
 
 const getGroupKey = (tab, date) => {
-  const current = new Date(date);
+  const current = parseStoredDate(date);
 
   if (tab === "Daily") {
-    return getStartOfDay(current).toISOString();
+    return `D:${formatDateKey(getStartOfDay(current))}`;
   }
 
   if (tab === "Weekly") {
-    return getStartOfWeek(current).toISOString();
+    return `W:${formatDateKey(getStartOfWeek(current))}`;
   }
 
   if (tab === "Monthly") {
-    return getStartOfMonth(current).toISOString();
+    const start = getStartOfMonth(current);
+    return `M:${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}`;
   }
 
-  return getStartOfYear(current).toISOString();
+  return `Y:${getStartOfYear(current).getFullYear()}`;
 };
 
 const getTransactionDateLabel = (value) => {
@@ -133,7 +141,7 @@ const getTransactionDateLabel = (value) => {
     return "Today";
   }
 
-  return new Date(value).toLocaleDateString("en-US", {
+  return parseStoredDate(value).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
   });
@@ -154,19 +162,15 @@ export default function TransactionsScreen({ navigation, route }) {
       return;
     }
 
-    const [{ data, error }, { data: accountRows }] = await Promise.all([
+    const [{ data, error }, { data: accountRows }, { data: categoryRows }] = await Promise.all([
       supabase
         .from("transactions")
-        .select(`
-          *,
-          categories(name,icon,color),
-          to_account:to_account_id(name)
-        `)
+        .select("*")
         .eq("user_id", user.id)
         .order("date", { ascending: false })
         .order("time", { ascending: false }),
       supabase.from("accounts").select("id,name").eq("user_id", user.id),
-      supabase.from("accounts").select("id,name").eq("user_id", user.id),
+      supabase.from("categories").select("id,name,icon,color").eq("user_id", user.id),
     ]);
 
     if (error) {
@@ -176,11 +180,15 @@ export default function TransactionsScreen({ navigation, route }) {
     }
 
     const accountMap = Object.fromEntries((accountRows || []).map((account) => [account.id, account]));
+    const categoryMap = Object.fromEntries(
+      (categoryRows || []).map((category) => [category.id, category])
+    );
 
     setTransactions(
       (data || []).map((transaction) => ({
         ...transaction,
         account: accountMap[transaction.account_id] || null,
+        categories: categoryMap[transaction.category_id] || null,
       }))
     );
   }, []);
@@ -207,7 +215,7 @@ export default function TransactionsScreen({ navigation, route }) {
       if (!groups.has(key)) {
         groups.set(key, {
           key,
-          date: new Date(key),
+          date: getStartOfDay(parseStoredDate(transaction.date)),
           title: formatSectionTitle(activeTab, transaction.date),
           total: 0,
           items: [],
@@ -240,6 +248,7 @@ export default function TransactionsScreen({ navigation, route }) {
       >
         {groupedTransactions.length === 0 ? (
           <View style={styles.emptyCard}>
+            <Ionicons name="wallet-outline" size={54} color="#e8d9d1" />
             <Text style={styles.emptyTitle}>No transactions found</Text>
             <Text style={styles.emptySub}>
               Add a transaction to start seeing daily, weekly, monthly, and yearly summaries.
@@ -267,6 +276,18 @@ export default function TransactionsScreen({ navigation, route }) {
                     item.type === "transfer"
                       ? `${item.account?.name || "Account"}`
                       : item.account?.name || item.categories?.name || "Account";
+                  const transactionTypeVisual =
+                    item.type === "expense"
+                      ? "expense"
+                      : item.type === "income"
+                      ? "income"
+                      : "transfer";
+                  const amountPrefix =
+                    transactionTypeVisual === "expense"
+                      ? "-"
+                      : transactionTypeVisual === "income"
+                      ? "+"
+                      : "";
 
                   return (
                     <TransactionListItem
@@ -276,7 +297,8 @@ export default function TransactionsScreen({ navigation, route }) {
                       dateLabel={getTransactionDateLabel(item.date)}
                       amount={item.amount}
                       time={item.time}
-                      transactionType={item.type}
+                      transactionType={transactionTypeVisual}
+                      amountPrefix={amountPrefix}
                       categoryColor={item.categories?.color || "#5a4138"}
                       categoryIcon={item.categories?.icon || "credit-card-outline"}
                       showDivider={index !== group.items.length - 1}
@@ -333,27 +355,31 @@ const styles = StyleSheet.create({
   },
 
   container: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     paddingBottom: 124,
   },
 
   emptyCard: {
-    backgroundColor: colors.card,
-    borderRadius: 24,
-    padding: 24,
-    marginTop: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    minHeight: 260,
+    marginTop: 8,
   },
 
   emptyTitle: {
-    color: colors.text,
-    fontSize: 18,
+    color: "#fff",
+    fontSize: 22,
     fontWeight: "700",
+    textAlign: "center",
+    marginTop: 14,
   },
 
   emptySub: {
-    color: "#d4c1b7",
-    marginTop: 10,
-    lineHeight: 20,
+    color: "#bfa9a0",
+    marginTop: 8,
+    fontSize: 15,
+    textAlign: "center",
   },
 
   groupSection: {
@@ -364,17 +390,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 12,
+    marginBottom: 10,
+    paddingHorizontal: 2,
   },
 
   groupTitle: {
-    color: colors.text,
+    color: "#f1dfd5",
     fontSize: 16,
     fontWeight: "700",
   },
 
   groupTotal: {
-    color: "#d9cdc6",
+    color: "#bfa9a0",
     fontSize: 15,
     fontWeight: "700",
   },
@@ -388,15 +415,17 @@ const styles = StyleSheet.create({
   },
 
   groupCard: {
-    backgroundColor: colors.card,
-    borderRadius: 24,
-    overflow: "hidden",
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    borderWidth: 0,
+    borderColor: "transparent",
+    overflow: "visible",
   },
 
   tabBar: {
     position: "absolute",
-    left: 16,
-    right: 16,
+    left: 20,
+    right: 20,
     bottom: 22,
     flexDirection: "row",
     backgroundColor: "#261813",

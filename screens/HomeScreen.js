@@ -27,6 +27,23 @@ const parseStoredDate = (value) => {
   return new Date(year, (month || 1) - 1, day || 1);
 };
 
+const timeToSeconds = (value) => {
+  const [hours, minutes, seconds] = String(value || "00:00:00")
+    .split(":")
+    .map((part) => Number(part) || 0);
+  return hours * 3600 + minutes * 60 + seconds;
+};
+
+const compareTransactionsByDateTimeDesc = (left, right) => {
+  const dateDiff = parseStoredDate(right.date).getTime() - parseStoredDate(left.date).getTime();
+  if (dateDiff !== 0) return dateDiff;
+
+  const timeDiff = timeToSeconds(right.time) - timeToSeconds(left.time);
+  if (timeDiff !== 0) return timeDiff;
+
+  return new Date(right.created_at || 0).getTime() - new Date(left.created_at || 0).getTime();
+};
+
 const getMondayOfWeek = (value = new Date()) => {
   const date = new Date(value);
   date.setHours(0, 0, 0, 0);
@@ -237,17 +254,19 @@ export default function HomeScreen({ navigation, route }) {
         .eq("user_id", user.id)
         .order("date", { ascending: false })
         .order("time", { ascending: false })
-        .limit(5),
+        .order("created_at", { ascending: false }),
       supabase.from("accounts").select("id,name").eq("user_id", user.id),
     ]);
 
     const accountMap = Object.fromEntries((accountRows || []).map((account) => [account.id, account]));
 
     setTransactions(
-      (tx || []).map((transaction) => ({
-        ...transaction,
-        account: accountMap[transaction.account_id] || null,
-      }))
+      (tx || [])
+        .map((transaction) => ({
+          ...transaction,
+          account: accountMap[transaction.account_id] || null,
+        }))
+        .sort(compareTransactionsByDateTimeDesc)
     );
 
     const { data: weeklySourceTransactions } = await supabase
@@ -483,36 +502,38 @@ export default function HomeScreen({ navigation, route }) {
     return `₹${Number(value || 0).toFixed(2)}`;
   };
 
-  const getChangeMeta = (currentValue, previousValue) => {
+  const getChangeMeta = (currentValue, previousValue, { improveWhenLower = false } = {}) => {
     if (!previousValue) {
       if (!currentValue) {
         return {
-          direction: "flat",
-          percentageText: "0.0%",
+          tone: "neutral",
+          percentageText: "→ 0.0%",
           comparisonText: "Compared to ₹0.00 last month",
         };
       }
 
       return {
-        direction: "up",
-        percentageText: "New",
+        tone: improveWhenLower ? "negative" : "positive",
+        percentageText: "↑ New",
         comparisonText: `Compared to ${formatAmount(previousValue)} last month`,
       };
     }
 
     const change = ((currentValue - previousValue) / previousValue) * 100;
-    const direction = change > 0 ? "up" : change < 0 ? "down" : "flat";
+    const isFlat = change === 0;
+    const isImprovement = improveWhenLower ? change < 0 : change > 0;
+    const arrow = isFlat ? "→" : change > 0 ? "↑" : "↓";
     const sign = change > 0 ? "+" : "";
 
     return {
-      direction,
-      percentageText: `${sign}${change.toFixed(1)}%`,
+      tone: isFlat ? "neutral" : isImprovement ? "positive" : "negative",
+      percentageText: `${arrow} ${sign}${change.toFixed(1)}%`,
       comparisonText: `Compared to ${formatAmount(previousValue)} last month`,
     };
   };
 
-  const incomeMeta = getChangeMeta(income, lastMonthIncome);
-  const expenseMeta = getChangeMeta(expense, lastMonthExpense);
+  const incomeMeta = getChangeMeta(income, lastMonthIncome, { improveWhenLower: false });
+  const expenseMeta = getChangeMeta(expense, lastMonthExpense, { improveWhenLower: true });
 
   return (
 
@@ -573,8 +594,8 @@ export default function HomeScreen({ navigation, route }) {
               <Text
                 style={[
                   styles.metricChange,
-                  incomeMeta.direction === "down" && styles.metricChangeDown,
-                  incomeMeta.direction === "flat" && styles.metricChangeFlat,
+                  incomeMeta.tone === "negative" && styles.metricChangeDown,
+                  incomeMeta.tone === "neutral" && styles.metricChangeFlat,
                 ]}
               >
                 {incomeMeta.percentageText}
@@ -592,8 +613,8 @@ export default function HomeScreen({ navigation, route }) {
               <Text
                 style={[
                   styles.metricChange,
-                  expenseMeta.direction === "down" && styles.metricChangeDown,
-                  expenseMeta.direction === "flat" && styles.metricChangeFlat,
+                  expenseMeta.tone === "negative" && styles.metricChangeDown,
+                  expenseMeta.tone === "neutral" && styles.metricChangeFlat,
                 ]}
               >
                 {expenseMeta.percentageText}
@@ -681,9 +702,13 @@ export default function HomeScreen({ navigation, route }) {
 
         {/* RECENT TRANSACTIONS */}
 
-        <View style={styles.summaryCard}>
-
-          <Text style={styles.sectionTitle}>Recent transactions</Text>
+        <View style={styles.recentSection}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>Recent transactions</Text>
+            <TouchableOpacity onPress={() => navigation.navigate("Calendar Heatmap")}>
+              <Text style={styles.sectionAction}>See all</Text>
+            </TouchableOpacity>
+          </View>
 
           {transactions.length === 0 && (
             <Text style={styles.lightMuted}>
@@ -708,7 +733,6 @@ export default function HomeScreen({ navigation, route }) {
               showDivider={index !== transactions.length - 1}
             />
           ))}
-
         </View>
 
       </ScrollView>
@@ -1256,10 +1280,27 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 
+  recentSection: {
+    marginBottom: 20,
+  },
+
   sectionTitle: {
     fontSize: 18,
     fontWeight: "700",
     color: colors.text,
+    marginBottom: 14,
+  },
+
+  sectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  sectionAction: {
+    color: colors.gold,
+    fontSize: 13,
+    fontWeight: "700",
     marginBottom: 14,
   },
 

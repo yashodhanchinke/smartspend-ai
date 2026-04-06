@@ -30,6 +30,17 @@ const BANK_RULES = [
     senderHints: ["pnb", "pnbsms"],
   },
   {
+    name: "Bank of Maharashtra",
+    aliases: [
+      "bank of maharashtra",
+      "maharashtra bank",
+      "mahabank",
+      "mahabk",
+      "bom",
+    ],
+    senderHints: ["mahabk", "mahabank", "bankofmaharashtra"],
+  },
+  {
     name: "Bank of Baroda",
     aliases: ["bob", "bank of baroda"],
     senderHints: ["bankbd", "baroda", "bob"],
@@ -157,6 +168,48 @@ export function findMatchingBankAccount(accounts = [], rule) {
 
   const bankAccounts = accounts.filter((account) => account?.type === "bank");
   return bankAccounts.find((account) => accountMatchesRule(account, rule)) || null;
+}
+
+const RX_BANK_CONTEXT =
+  /(a\/c|account|acct|upi|imps|neft|rtgs|atm|debit card|credit card|ifsc|avail(?:able)? bal(?:ance)?|txn|utr|ref(?:erence)?\s*(?:no|num|id)?)/i;
+const RX_TXN_ACTION =
+  /(debited|credited|spent|paid|purchase|withdrawn|received|sent|deposit|deposited|payment)/i;
+const RX_AMOUNT = /(inr|rs\.?|₹)\s*[:\-]?\s*[0-9,]+(?:\.[0-9]{1,2})?/i;
+const RX_INDIAN_HEADER = /^[a-z]{2}[-\s]?[a-z0-9]{5,8}(?:[-\s]?[a-z])?$/i;
+
+export function isLikelyBankTransactionSms({ sender, message }) {
+  const normalizedSender = normalizeSmsText(sender);
+  const normalizedMessage = normalize(message);
+
+  if (!normalizedMessage) {
+    return false;
+  }
+
+  const compactMessage = normalizeSmsText(normalizedMessage);
+  const senderLooksLikeHeader = RX_INDIAN_HEADER.test(String(sender || "").trim());
+  const hasTxnAction = RX_TXN_ACTION.test(normalizedMessage);
+  const hasBankContext = RX_BANK_CONTEXT.test(normalizedMessage);
+  const hasAmount = RX_AMOUNT.test(normalizedMessage);
+  const hasCoreTxnTerms =
+    compactMessage.includes("upi") ||
+    compactMessage.includes("imps") ||
+    compactMessage.includes("neft") ||
+    compactMessage.includes("rtgs") ||
+    compactMessage.includes("utr") ||
+    compactMessage.includes("txn") ||
+    compactMessage.includes("debit") ||
+    compactMessage.includes("credit");
+
+  // Generic bank-SMS detection:
+  // 1) Indian sender header + transactional text + amount
+  // 2) Or clearly transactional banking keywords + amount
+  return (
+    (senderLooksLikeHeader &&
+      (hasBankContext || hasCoreTxnTerms) &&
+      hasTxnAction &&
+      hasAmount) ||
+    ((hasBankContext || hasCoreTxnTerms) && hasTxnAction && hasAmount)
+  );
 }
 
 export function isOtpLikeBankSms(message) {

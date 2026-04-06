@@ -20,6 +20,40 @@ function getMessageKey(sender, message) {
   return `${String(sender || "").trim()}::${String(message || "").trim()}`;
 }
 
+function parseSmsTimestamp(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return null;
+  }
+
+  const parsed = new Date(numeric);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isSameLocalDate(a, b) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+function isSmsFromToday(value) {
+  const parsed = parseSmsTimestamp(value);
+  if (!parsed) {
+    return false;
+  }
+
+  return isSameLocalDate(parsed, new Date());
+}
+
+function formatLocalDate(value) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 async function requestSmsPermission() {
   const result = await PermissionsAndroid.requestMultiple([
     PermissionsAndroid.PERMISSIONS.READ_SMS,
@@ -169,23 +203,12 @@ export async function syncSmsTransactionsForUser(userId) {
     const message = sms?.body || sms?.message || "";
     const key = getMessageKey(sender, message);
 
-    if (!message.trim() || knownSmsKeys.has(key)) {
+    if (!message.trim() || knownSmsKeys.has(key) || !isSmsFromToday(sms?.date)) {
       skipped += 1;
       continue;
     }
 
     if (isOtpLikeBankSms(message)) {
-      skipped += 1;
-      continue;
-    }
-
-    const matchedBankRule = findMatchingBankRule({
-      sender,
-      message,
-      enabledRules: enabledBankRules,
-    });
-
-    if (!matchedBankRule) {
       skipped += 1;
       continue;
     }
@@ -202,6 +225,17 @@ export async function syncSmsTransactionsForUser(userId) {
       continue;
     }
 
+    const matchedBankRule = findMatchingBankRule({
+      sender,
+      message,
+      enabledRules: enabledBankRules,
+    });
+
+    if (!matchedBankRule) {
+      skipped += 1;
+      continue;
+    }
+
     const category = await resolveCategory(userId, categories, parsed);
     const targetAccount =
       findMatchingBankAccount(bankAccounts, matchedBankRule) || defaultBankAccount;
@@ -212,7 +246,7 @@ export async function syncSmsTransactionsForUser(userId) {
       title: parsed.title,
       amount: parsed.amount,
       description: `Imported from SMS: ${sender}`,
-      date: parsed.occurredAt.toISOString().split("T")[0],
+      date: formatLocalDate(parsed.occurredAt),
       time: parsed.occurredAt.toTimeString().split(" ")[0],
       accountId: targetAccount.id,
       categoryId: category?.id || null,
@@ -257,8 +291,9 @@ export async function ingestIncomingSmsForUser(userId, sms) {
 
   const sender = sms?.sender || sms?.address || "SMS";
   const message = sms?.body || sms?.message || "";
+  const smsTimestamp = sms?.timestamp || sms?.date;
 
-  if (!message.trim() || isOtpLikeBankSms(message)) {
+  if (!message.trim() || isOtpLikeBankSms(message) || !isSmsFromToday(smsTimestamp)) {
     return false;
   }
 
@@ -282,7 +317,7 @@ export async function ingestIncomingSmsForUser(userId, sms) {
   const parsed = parseSmsTransaction({
     sender,
     message,
-    date: sms?.timestamp || sms?.date,
+    date: smsTimestamp,
     availableCategories: categories,
   });
 
@@ -300,7 +335,7 @@ export async function ingestIncomingSmsForUser(userId, sms) {
     title: parsed.title,
     amount: parsed.amount,
     description: `Imported from SMS: ${sender}`,
-    date: parsed.occurredAt.toISOString().split("T")[0],
+    date: formatLocalDate(parsed.occurredAt),
     time: parsed.occurredAt.toTimeString().split(" ")[0],
     accountId: targetAccount.id,
     categoryId: category?.id || null,

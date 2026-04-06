@@ -48,15 +48,18 @@ function TransactionListItem({
             {title || "Transaction"}
           </Text>
           <View style={styles.metaRow}>
-            <Text style={styles.accountMeta} numberOfLines={1}>
+            <Text
+              style={styles.accountMeta}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.85}
+            >
               {accountLabel || "Account"}
-            </Text>
-            <View style={styles.metaRight}>
-              <Text style={styles.metaDot}>•</Text>
-              <Text style={styles.dateMeta} numberOfLines={1}>
+              <Text style={styles.dateMeta}>
+                {" • "}
                 {dateLabel || "--"}
               </Text>
-            </View>
+            </Text>
           </View>
         </View>
       </View>
@@ -128,27 +131,11 @@ const styles = StyleSheet.create({
   accountMeta: {
     color: "#cdb8ae",
     fontSize: 11,
-    flexShrink: 1,
-    flex: 1,
-    marginRight: 6,
-  },
-
-  metaRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexShrink: 0,
-  },
-
-  metaDot: {
-    color: "#cdb8ae",
-    fontSize: 11,
-    marginRight: 4,
   },
 
   dateMeta: {
     color: "#cdb8ae",
     fontSize: 11,
-    flexShrink: 0,
   },
 
   amountWrap: {

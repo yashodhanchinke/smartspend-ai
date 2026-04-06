@@ -2,9 +2,9 @@
 import Feather from "@expo/vector-icons/Feather";
 import { StyleSheet, TouchableOpacity } from "react-native";
 
-export default function FloatingButton({ onPress }) {
+export default function FloatingButton({ onPress, style }) {
   return (
-    <TouchableOpacity style={styles.fab} onPress={onPress}>
+    <TouchableOpacity style={[styles.fab, style]} onPress={onPress}>
       <Feather name="plus" size={26} color="#000" />
     </TouchableOpacity>
   );

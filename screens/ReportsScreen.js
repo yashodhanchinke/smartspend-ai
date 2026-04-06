@@ -1051,13 +1051,24 @@ export default function ReportsScreen() {
   const [draftStartDate, setDraftStartDate] = useState(currentBounds.start);
   const [draftEndDate, setDraftEndDate] = useState(currentBounds.end);
   const [isRequestingReport, setIsRequestingReport] = useState(false);
+  const [isEmailingReport, setIsEmailingReport] = useState(false);
   const [lastReportUrl, setLastReportUrl] = useState(null);
-  const [lastReportFilename, setLastReportFilename] = useState(null);
   const [generatedReports, setGeneratedReports] = useState([]);
   const [profileEmail, setProfileEmail] = useState("");
 
-  const requestReport = async (payload, labelForHistory) => {
-    setIsRequestingReport(true);
+  const requestReport = async (
+    payload,
+    labelForHistory,
+    {
+      sendEmail = false,
+      loadingSetter = setIsRequestingReport,
+      successTitle = sendEmail ? "Sent" : "Success",
+      successMessage = sendEmail
+        ? `Report emailed to ${(profileEmail || "").trim() || "your email"}`
+        : "Your report is ready.",
+    } = {}
+  ) => {
+    loadingSetter(true);
     try {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
       if (sessionError || !session?.access_token) {
@@ -1072,7 +1083,11 @@ export default function ReportsScreen() {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${session.access_token}`
         },
-        body: JSON.stringify({ ...payload, send_email: false })
+        body: JSON.stringify({
+          ...payload,
+          send_email: sendEmail,
+          email_to: sendEmail ? (profileEmail || "").trim() : undefined,
+        })
       });
 
       const rawText = await response.text();
@@ -1094,8 +1109,8 @@ export default function ReportsScreen() {
 
       const reportUrl = json?.report_url || null;
       const filename = json?.filename || null;
+      const reportId = json?.report_id || null;
       setLastReportUrl(reportUrl);
-      setLastReportFilename(filename);
 
       if (reportUrl) {
         const absoluteUrl = reportUrl.startsWith("http")
@@ -1104,74 +1119,93 @@ export default function ReportsScreen() {
 
         setGeneratedReports((current) => [
           {
-            key: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+            id: reportId || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
             label: labelForHistory || "Generated report",
             url: absoluteUrl,
-            createdAt: new Date().toISOString(),
+            createdAt: json?.created_at || new Date().toISOString(),
+            filename,
+            emailStatus: json?.email_status || (sendEmail ? "success" : "skipped"),
           },
-          ...current,
+          ...current.filter((item) => item.id !== reportId),
         ]);
 
         Alert.alert(
-          "Success",
-          `Your report is ready.`,
-          [
-            {
-              text: "View PDF",
-              onPress: async () => {
-                await WebBrowser.openBrowserAsync(absoluteUrl);
-              },
-            },
-            {
-              text: "Email PDF",
-              onPress: async () => {
-                try {
-                  if (!filename) {
-                    throw new Error("Missing report filename.");
-                  }
-                  const emailTo = (profileEmail || "").trim();
-                  if (!emailTo) {
-                    throw new Error("Email not found. Please set it in Profile.");
-                  }
+          successTitle,
+          successMessage,
+          sendEmail
+            ? [{ text: "OK", style: "cancel" }]
+            : [
+                {
+                  text: "View PDF",
+                  onPress: async () => {
+                    await WebBrowser.openBrowserAsync(absoluteUrl);
+                  },
+                },
+                {
+                  text: "Email PDF",
+                  onPress: async () => {
+                    try {
+                      const emailTo = (profileEmail || "").trim();
+                      if (!emailTo) {
+                        throw new Error("Email not found. Please set it in Profile.");
+                      }
 
-                  const { data: { session } } = await supabase.auth.getSession();
-                  if (!session?.access_token) {
-                    throw new Error("You must be logged in.");
-                  }
+                      const { data: { session } } = await supabase.auth.getSession();
+                      if (!session?.access_token) {
+                        throw new Error("You must be logged in.");
+                      }
 
-                  const resp = await fetch(`${API_URL}/api/email-report`, {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      "Authorization": `Bearer ${session.access_token}`,
-                    },
-                    body: JSON.stringify({ filename, email_to: emailTo }),
-                  });
+                      const resp = await fetch(`${API_URL}/api/email-report`, {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          "Authorization": `Bearer ${session.access_token}`,
+                        },
+                        body: JSON.stringify({ report_id: reportId, filename, email_to: emailTo }),
+                      });
 
-                  const t = await resp.text();
-                  const j = t ? JSON.parse(t) : null;
-                  if (!resp.ok || !j?.success) {
-                    throw new Error(j?.details || j?.error || "Failed to send email.");
-                  }
+                      const t = await resp.text();
+                      const j = t ? JSON.parse(t) : null;
+                      if (!resp.ok || !j?.success) {
+                        throw new Error(j?.details || j?.error || "Failed to send email.");
+                      }
 
-                  Alert.alert("Sent", `Report emailed to ${emailTo}`);
-                } catch (err) {
-                  Alert.alert("Error", err.message || "Could not email report.");
-                }
-              },
-            },
-            { text: "OK", style: "cancel" },
-          ]
+                      Alert.alert("Sent", `Report emailed to ${emailTo}`);
+                    } catch (err) {
+                      Alert.alert("Error", err.message || "Could not email report.");
+                    }
+                  },
+                },
+                { text: "OK", style: "cancel" },
+              ]
         );
       } else {
-        Alert.alert("Success", "Your report was generated successfully.");
+        Alert.alert(successTitle, successMessage);
       }
     } catch (e) {
       Alert.alert("Error", e.message || "An error occurred while requesting your report.");
     } finally {
-      setIsRequestingReport(false);
+      loadingSetter(false);
     }
   };
+
+  const buildReportFiltersSnapshot = () => ({
+    range: appliedRange,
+    account_ids: appliedAccountIds,
+    category_ids: appliedCategoryIds,
+    selected_period_key: selectedPeriod?.key || null,
+    selected_period_label: selectedPeriod?.label || null,
+    start_date: formatDateKey(selectedPeriodBounds.start),
+    end_date: formatDateKey(selectedPeriodBounds.end),
+  });
+
+  const buildFilteredReportPayload = () => ({
+    report_label: `filtered-${appliedRange}-${formatDateKey(selectedPeriodBounds.start)}-to-${formatDateKey(
+      selectedPeriodBounds.end
+    )}`,
+    transactions: periodTransactions,
+    filters: buildReportFiltersSnapshot(),
+  });
 
   const handleRequestMonthlyReport = async () => {
     const monthStr = selectedPeriod
@@ -1182,6 +1216,7 @@ export default function ReportsScreen() {
       {
         report_label: `month-${monthStr}`,
         transactions: periodTransactions,
+        filters: buildReportFiltersSnapshot(),
       },
       `Monthly report (${monthStr})`
     );
@@ -1203,9 +1238,33 @@ export default function ReportsScreen() {
       {
         report_label: `last-30-days-${startKey}-to-${endKey}`,
         transactions: last30Transactions,
+        filters: {
+          range: "custom",
+          start_date: startKey,
+          end_date: endKey,
+          preset: "last_30_days",
+        },
       },
       "Last 30 days"
     );
+  };
+
+  const handleEmailFilteredReport = async () => {
+    const emailTo = (profileEmail || "").trim();
+    if (!emailTo) {
+      Alert.alert("Missing email", "Please add your email in Profile before sending reports.");
+      return;
+    }
+
+    if (!periodTransactions.length) {
+      Alert.alert("No data", "There are no transactions in the current filtered report.");
+      return;
+    }
+
+    await requestReport(buildFilteredReportPayload(), `Filtered report (${selectedPeriod?.label || appliedRange})`, {
+      sendEmail: true,
+      loadingSetter: setIsEmailingReport,
+    });
   };
 
   const loadData = useCallback(async () => {
@@ -1217,6 +1276,7 @@ export default function ReportsScreen() {
       setTransactions([]);
       setAccounts([]);
       setCategories([]);
+      setGeneratedReports([]);
       setProfileEmail("");
       return;
     }
@@ -1253,6 +1313,35 @@ export default function ReportsScreen() {
     setTransactions(txData || []);
     setAccounts(accountData || []);
     setCategories(categoryData || []);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        const API_URL = getApiBaseUrl();
+        const reportsResp = await fetch(`${API_URL}/api/reports`, {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        });
+
+        const raw = await reportsResp.text();
+        const json = raw ? JSON.parse(raw) : null;
+        if (reportsResp.ok && json?.success) {
+          const nextReports = (json.reports || []).map((item) => ({
+            id: item.id,
+            label: item.label,
+            url: item.report_url,
+            createdAt: item.created_at,
+            filename: item.filename,
+            emailStatus: item.email_status,
+          }));
+          setGeneratedReports(nextReports);
+          setLastReportUrl(nextReports[0]?.url || null);
+        }
+      }
+    } catch (reportError) {
+      console.warn("Could not load stored reports:", reportError.message);
+    }
   }, []);
 
   useFocusEffect(
@@ -1471,7 +1560,7 @@ export default function ReportsScreen() {
             <View>
               <Text style={styles.cardTitle}>Reports</Text>
               <Text style={styles.chartSubTitle}>
-                {selectedPeriod?.label || "No period"} • {appliedRange}
+                {selectedPeriod?.label || "No period"} - {appliedRange}
               </Text>
             </View>
 
@@ -1648,21 +1737,38 @@ export default function ReportsScreen() {
             </Pressable>
           ) : null}
 
+          <Pressable
+            style={[styles.viewReportButton, styles.emailReportButton]}
+            onPress={handleEmailFilteredReport}
+            disabled={isEmailingReport || isRequestingReport}
+          >
+            <MaterialCommunityIcons name="email-outline" size={22} color="#2f1814" />
+            <Text style={styles.emailReportButtonText}>
+              {isEmailingReport ? "Sending filtered report..." : "Send filtered report to email"}
+            </Text>
+          </Pressable>
+
           {generatedReports.length ? (
             <View style={styles.generatedReportsWrap}>
               <Text style={styles.generatedReportsTitle}>Generated reports</Text>
               {generatedReports.slice(0, 5).map((item) => (
                 <Pressable
-                  key={item.key}
+                  key={item.id || item.filename || item.createdAt}
                   style={styles.generatedReportRow}
                   onPress={async () => {
+                    if (!item.url) {
+                      Alert.alert("Unavailable", "This report link expired. Generate or email it again.");
+                      return;
+                    }
                     await WebBrowser.openBrowserAsync(item.url);
                   }}
                 >
                   <MaterialCommunityIcons name="file-pdf-box" size={20} color="#ffb49a" />
                   <View style={styles.generatedReportCopy}>
                     <Text style={styles.generatedReportLabel}>{item.label}</Text>
-                    <Text style={styles.generatedReportMeta}>{new Date(item.createdAt).toLocaleString()}</Text>
+                    <Text style={styles.generatedReportMeta}>
+                      {new Date(item.createdAt).toLocaleString()} - {item.emailStatus || "stored"}
+                    </Text>
                   </View>
                   <Feather name="chevron-right" size={18} color="#92766d" />
                 </Pressable>
@@ -2291,6 +2397,15 @@ const styles = StyleSheet.create({
   },
   viewReportButtonText: {
     color: "#f4e2d9",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  emailReportButton: {
+    backgroundColor: "#ffcfbf",
+    borderColor: "#ffcfbf",
+  },
+  emailReportButtonText: {
+    color: "#2f1814",
     fontSize: 16,
     fontWeight: "800",
   },

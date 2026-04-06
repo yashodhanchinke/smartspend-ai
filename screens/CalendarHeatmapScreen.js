@@ -33,6 +33,15 @@ const formatDateKey = (value) => {
   return `${year}-${month}-${day}`;
 };
 
+const getHeatColor = (count) => {
+  if (!count) return null;
+  if (count === 1) return "#5d4339";
+  if (count === 2) return "#7a5649";
+  if (count === 3) return "#996b5b";
+  if (count <= 5) return "#bb836f";
+  return "#efb7a2";
+};
+
 const buildMonthCells = (visibleMonth, selectedDate) => {
   const year = visibleMonth.getFullYear();
   const month = visibleMonth.getMonth();
@@ -91,6 +100,7 @@ const buildMonthRange = (currentMonth) => {
 };
 
 const CalendarMonthPage = memo(function CalendarMonthPage({
+  dayCountMap,
   item,
   pageWidth,
   selectedDateKey,
@@ -111,7 +121,11 @@ const CalendarMonthPage = memo(function CalendarMonthPage({
           return (
             <TouchableOpacity
               key={cell.key}
-              style={[styles.day, cell.selected && styles.selectedDay]}
+              style={[
+                styles.day,
+                dayCountMap[cell.key] ? { backgroundColor: getHeatColor(dayCountMap[cell.key]) } : null,
+                cell.selected && styles.selectedDay,
+              ]}
               onPress={() => onSelectDate(cell.date)}
             >
               <Text style={[styles.dayText, cell.selected && styles.selectedDayText]}>
@@ -184,6 +198,21 @@ export default function CalendarHeatmapScreen({ navigation }) {
 
   const selectedDateKey = formatDateKey(selectedDate);
 
+  const dayCountMap = useMemo(() => {
+    const counts = {};
+
+    transactions.forEach((transaction) => {
+      if (transaction.type === "transfer") {
+        return;
+      }
+
+      const dateKey = formatDateKey(parseStoredDate(transaction.date));
+      counts[dateKey] = (counts[dateKey] || 0) + 1;
+    });
+
+    return counts;
+  }, [transactions]);
+
   const selectedTransactions = useMemo(() => {
     return transactions.filter(
       (transaction) => formatDateKey(parseStoredDate(transaction.date)) === selectedDateKey
@@ -202,13 +231,14 @@ export default function CalendarHeatmapScreen({ navigation }) {
   const renderMonthPage = useCallback(
     ({ item }) => (
       <CalendarMonthPage
+        dayCountMap={dayCountMap}
         item={item}
         pageWidth={pageWidth}
         selectedDateKey={selectedDateKey}
         onSelectDate={setSelectedDate}
       />
     ),
-    [pageWidth, selectedDateKey]
+    [dayCountMap, pageWidth, selectedDateKey]
   );
 
   return (
@@ -437,7 +467,6 @@ const styles = StyleSheet.create({
   selectedDay: {
     borderWidth: 3,
     borderColor: colors.gold,
-    backgroundColor: "#473432",
   },
 
   dayText: {

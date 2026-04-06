@@ -196,3 +196,43 @@ CREATE TABLE public.transactions (
   CONSTRAINT transactions_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.categories(id),
   CONSTRAINT transactions_to_account_id_fkey FOREIGN KEY (to_account_id) REFERENCES public.accounts(id)
 );
+CREATE TABLE public.user_reports (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  email_to text,
+  filename text NOT NULL,
+  storage_path text NOT NULL,
+  report_label text,
+  range_start date,
+  range_end date,
+  filter_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb,
+  summary_text text,
+  advice_text text,
+  email_status text NOT NULL DEFAULT 'pending'::text,
+  is_automatic boolean NOT NULL DEFAULT false,
+  generated_for_month text,
+  sent_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT user_reports_pkey PRIMARY KEY (id),
+  CONSTRAINT user_reports_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+);
+CREATE UNIQUE INDEX user_reports_auto_month_unique_idx
+ON public.user_reports (user_id, generated_for_month)
+WHERE ((is_automatic = true) AND (generated_for_month IS NOT NULL));
+CREATE INDEX user_reports_user_created_at_idx
+ON public.user_reports (user_id, created_at DESC);
+ALTER TABLE public.user_reports ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own reports"
+ON public.user_reports
+FOR SELECT
+TO authenticated
+USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own reports"
+ON public.user_reports
+FOR INSERT
+TO authenticated
+WITH CHECK (auth.uid() = user_id);
+
+-- Storage reference:
+-- Bucket: reports
+-- Purpose: stores generated PDF files for user reports
