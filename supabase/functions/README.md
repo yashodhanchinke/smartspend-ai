@@ -22,13 +22,20 @@ supabase functions deploy generate-analytics-summary
 After deploy, the app will call:
 - `generate-analytics-summary`
 - `scan-receipt-ocr`
+- `classify-sms-transaction`
 
 Notes:
 - The mobile app does not expose the AI key directly.
-- The user must be authenticated because the function is configured with `verify_jwt = true`.
+- The app sends `userId` in function payloads; keep function access restricted to trusted app clients.
 
 Receipt OCR deploy:
 
 ```bash
 supabase functions deploy scan-receipt-ocr
+```
+
+SMS category classifier deploy:
+
+```bash
+supabase functions deploy classify-sms-transaction
 ```

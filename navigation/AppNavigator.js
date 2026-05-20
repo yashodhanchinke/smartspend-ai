@@ -30,6 +30,7 @@ import CategoryDetailsScreen from "../screens/CategoryDetailsScreen";
 import GoalsScreen from "../screens/GoalsScreen";
 import LabelsScreen from "../screens/LabelsScreen";
 import LoansScreen from "../screens/LoansScreen";
+import NotificationsScreen from "../screens/NotificationsScreen";
 import RecurringScreen from "../screens/RecurringScreen";
 import ReceiptScanScreen from "../screens/ReceiptScanScreen";
 import TransactionsScreen from "../screens/TransactionsScreen";
@@ -153,6 +154,7 @@ export default function AppNavigator() {
             <Stack.Screen name="Goals" component={GoalsScreen} />
             <Stack.Screen name="Labels" component={LabelsScreen} />
             <Stack.Screen name="Loans" component={LoansScreen} />
+            <Stack.Screen name="Notifications" component={NotificationsScreen} />
             <Stack.Screen name="Recurring" component={RecurringScreen} />
             <Stack.Screen name="AddGoal" component={AddGoalScreen} />
             <Stack.Screen name="UpdateGoal" component={AddGoalScreen} />

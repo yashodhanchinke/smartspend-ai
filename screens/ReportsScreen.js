@@ -2,7 +2,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import Feather from "@expo/vector-icons/Feather";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Constants from "expo-constants";
 import * as WebBrowser from "expo-web-browser";
 import {
@@ -31,24 +31,48 @@ const CHART_HEIGHT = 210;
 const CHART_TOP_PADDING = 16;
 const CHART_BOTTOM_PADDING = 28;
 
-function getApiBaseUrl() {
+function getApiBaseCandidates() {
+  const candidates = [];
   const configured = process.env.EXPO_PUBLIC_API_URL;
-  if (configured) return configured.replace(/\/+$/, "");
+  if (configured) {
+    candidates.push(configured.replace(/\/+$/, ""));
+  }
 
   // In Expo Go / dev, default to the same LAN host as Metro.
   const hostUri =
     Constants.expoConfig?.hostUri ||
     Constants.expoConfig?.debuggerHost ||
+    Constants.manifest2?.debuggerHost ||
     Constants.manifest2?.extra?.expoClient?.hostUri;
 
   if (typeof hostUri === "string" && hostUri.length) {
     const host = hostUri.split(":")[0];
-    return `http://${host}:3000`;
+    candidates.push(`http://${host}:3000`);
   }
 
   // Fallbacks for common local dev environments.
-  if (Platform.OS === "android") return "http://10.0.2.2:3000";
-  return "http://localhost:3000";
+  if (Platform.OS === "android") {
+    candidates.push("http://10.0.2.2:3000");
+  }
+  candidates.push("http://localhost:3000");
+
+  return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+// Global helper removed: Moved inside component to access callBackendApi
+
+async function fetchWithTimeout(url, init, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 const RANGE_OPTIONS = [
   { key: "daily", label: "Daily" },
@@ -1055,6 +1079,170 @@ export default function ReportsScreen() {
   const [lastReportUrl, setLastReportUrl] = useState(null);
   const [generatedReports, setGeneratedReports] = useState([]);
   const [profileEmail, setProfileEmail] = useState("");
+  const workingApiBaseRef = useRef(null);
+
+  const callBackendApi = useCallback(
+    async (path, init) => {
+      const preferred = workingApiBaseRef.current ? [workingApiBaseRef.current] : [];
+      const bases = Array.from(new Set([...preferred, ...getApiBaseCandidates()]));
+      let lastNetworkError = null;
+      const attemptedUrls = [];
+
+      for (const base of bases) {
+        try {
+          const targetUrl = `${base}${path}`;
+          attemptedUrls.push(targetUrl);
+          const response = await fetchWithTimeout(targetUrl, init, 8000);
+          workingApiBaseRef.current = base;
+          return { response, base };
+        } catch (error) {
+          lastNetworkError = error;
+        }
+      }
+
+      const configuredBase = process.env.EXPO_PUBLIC_API_URL;
+      const guidance = configuredBase
+        ? `Configured API URL (${configuredBase}) is unreachable from this device.`
+        : "EXPO_PUBLIC_API_URL is not set.";
+
+      throw new Error(
+        `${guidance} Set EXPO_PUBLIC_API_URL to a reachable backend URL. Tried: ${attemptedUrls.join(
+          ", "
+        )}${lastNetworkError?.message ? ` | Last error: ${lastNetworkError.message}` : ""}`
+      );
+    },
+    []
+  );
+
+  const fetchReports = useCallback(async (userId) => {
+    if (!userId) return [];
+    try {
+      const { response } = await callBackendApi(`/api/reports?limit=50`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
+        }
+      });
+      const rawText = await response.text();
+      const json = rawText ? JSON.parse(rawText) : null;
+
+      if (!response.ok || !json?.success) return [];
+
+      return (json?.reports || []).map((item) => ({
+        id: item.id,
+        label: item.label,
+        url: item.report_url,
+        storagePath: item.storage_path,
+        unavailable: false,
+        createdAt: item.created_at,
+        filename: item.filename,
+        emailStatus: item.email_status,
+      }));
+    } catch (error) {
+      console.warn("Failed to load reports via backend bridge:", error);
+      return [];
+    }
+  }, [callBackendApi]);
+
+  const openGeneratedReport = async (reportItem) => {
+    Alert.alert(
+      "Report Options",
+      `Choose an action for: ${reportItem.label}`,
+      [
+        {
+          text: "Open PDF",
+          onPress: async () => {
+            try {
+              let targetUrl = reportItem?.url || null;
+
+              if (reportItem?.storagePath) {
+                const { data: signedData, error: signedError } = await supabase.storage
+                  .from("reports")
+                  .createSignedUrl(reportItem.storagePath, 60 * 60 * 24);
+
+                if (signedError) throw signedError;
+                targetUrl = signedData?.signedUrl || targetUrl;
+
+                if (targetUrl) {
+                  setGeneratedReports((current) =>
+                    current.map((item) =>
+                      item.id === reportItem.id ? { ...item, url: targetUrl } : item
+                    )
+                  );
+                }
+              }
+
+              if (!targetUrl) {
+                Alert.alert("Unavailable", "This report link expired. Generate it again.");
+                return;
+              }
+
+              await WebBrowser.openBrowserAsync(targetUrl);
+            } catch (error) {
+              handleReportError(error, reportItem);
+            }
+          },
+        },
+        {
+          text: "Email PDF",
+          onPress: async () => {
+            try {
+              const emailTo = (profileEmail || "").trim();
+              if (!emailTo) {
+                throw new Error("Email not found. Please set it in Profile.");
+              }
+
+              const { data: { session } } = await supabase.auth.getSession();
+              if (!session?.access_token) throw new Error("You must be logged in.");
+
+              const { response: resp } = await callBackendApi("/api/email-report", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${session.access_token}`,
+                },
+                body: JSON.stringify({
+                  report_id: reportItem.id,
+                  filename: reportItem.filename,
+                  email_to: emailTo,
+                }),
+              });
+
+              const raw = await resp.text();
+              const json = raw ? JSON.parse(raw) : null;
+              if (!resp.ok || !json?.success) {
+                throw new Error(json?.details || json?.error || "Failed to send email.");
+              }
+
+              Alert.alert("Sent", `Report emailed to ${emailTo}`);
+            } catch (err) {
+              Alert.alert("Error", err.message || "Could not email report.");
+            }
+          },
+        },
+        { text: "Cancel", style: "cancel" },
+      ]
+    );
+  };
+
+  const handleReportError = (error, reportItem) => {
+    const rawMessage = String(error?.message || "");
+    const isMissingObject = /object not found|no such file|not found/i.test(rawMessage);
+
+    if (isMissingObject) {
+      setGeneratedReports((current) =>
+        current.map((item) =>
+          item.id === reportItem?.id ? { ...item, unavailable: true, url: null } : item
+        )
+      );
+      Alert.alert(
+        "Report Missing",
+        "This old report file is no longer in storage. Please generate a new report."
+      );
+    } else {
+      Alert.alert("Error", rawMessage || "Could not open report.");
+    }
+  };
 
   const requestReport = async (
     payload,
@@ -1075,26 +1263,24 @@ export default function ReportsScreen() {
         throw new Error("You must be logged in to request a report.");
       }
 
-      const API_URL = getApiBaseUrl();
-      
-      const response = await fetch(`${API_URL}/api/monthly-report`, {
+      const { response, base: API_URL } = await callBackendApi("/api/monthly-report", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`
+          Authorization: `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           ...payload,
           send_email: sendEmail,
           email_to: sendEmail ? (profileEmail || "").trim() : undefined,
-        })
+        }),
       });
 
       const rawText = await response.text();
       let json = null;
       try {
         json = rawText ? JSON.parse(rawText) : null;
-      } catch (parseError) {
+      } catch (_parseError) {
         json = null;
       }
 
@@ -1155,11 +1341,11 @@ export default function ReportsScreen() {
                         throw new Error("You must be logged in.");
                       }
 
-                      const resp = await fetch(`${API_URL}/api/email-report`, {
+                      const { response: resp } = await callBackendApi("/api/email-report", {
                         method: "POST",
                         headers: {
                           "Content-Type": "application/json",
-                          "Authorization": `Bearer ${session.access_token}`,
+                          Authorization: `Bearer ${session.access_token}`,
                         },
                         body: JSON.stringify({ report_id: reportId, filename, email_to: emailTo }),
                       });
@@ -1180,7 +1366,14 @@ export default function ReportsScreen() {
               ]
         );
       } else {
-        Alert.alert(successTitle, successMessage);
+        if (sendEmail && json?.queued) {
+          Alert.alert(
+            "Queued",
+            `Report generation started. It will be emailed to ${(profileEmail || "").trim() || "your email"} shortly.`
+          );
+        } else {
+          Alert.alert(successTitle, successMessage);
+        }
       }
     } catch (e) {
       Alert.alert("Error", e.message || "An error occurred while requesting your report.");
@@ -1203,7 +1396,10 @@ export default function ReportsScreen() {
     report_label: `filtered-${appliedRange}-${formatDateKey(selectedPeriodBounds.start)}-to-${formatDateKey(
       selectedPeriodBounds.end
     )}`,
-    transactions: periodTransactions,
+    custom_start_date: formatDateKey(selectedPeriodBounds.start),
+    custom_end_date: formatDateKey(selectedPeriodBounds.end),
+    account_ids: appliedAccountIds,
+    category_ids: appliedCategoryIds,
     filters: buildReportFiltersSnapshot(),
   });
 
@@ -1211,11 +1407,10 @@ export default function ReportsScreen() {
     const monthStr = selectedPeriod
       ? selectedPeriod.date.toISOString().substring(0, 7)
       : new Date().toISOString().substring(0, 7);
-    // Use the already-fetched data in this screen (no backend Supabase reads).
     await requestReport(
       {
+        month: monthStr,
         report_label: `month-${monthStr}`,
-        transactions: periodTransactions,
         filters: buildReportFiltersSnapshot(),
       },
       `Monthly report (${monthStr})`
@@ -1229,15 +1424,10 @@ export default function ReportsScreen() {
     const startKey = formatDateKey(start);
     const endKey = formatDateKey(end);
 
-    const last30Transactions = transactions.filter(
-      (t) => t.date >= startKey && t.date <= endKey
-    );
-
-    // Use the already-fetched data in this screen (no backend Supabase reads).
     await requestReport(
       {
+        range_days: 30,
         report_label: `last-30-days-${startKey}-to-${endKey}`,
-        transactions: last30Transactions,
         filters: {
           range: "custom",
           start_date: startKey,
@@ -1315,32 +1505,11 @@ export default function ReportsScreen() {
     setCategories(categoryData || []);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.access_token) {
-        const API_URL = getApiBaseUrl();
-        const reportsResp = await fetch(`${API_URL}/api/reports`, {
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-          },
-        });
-
-        const raw = await reportsResp.text();
-        const json = raw ? JSON.parse(raw) : null;
-        if (reportsResp.ok && json?.success) {
-          const nextReports = (json.reports || []).map((item) => ({
-            id: item.id,
-            label: item.label,
-            url: item.report_url,
-            createdAt: item.created_at,
-            filename: item.filename,
-            emailStatus: item.email_status,
-          }));
-          setGeneratedReports(nextReports);
-          setLastReportUrl(nextReports[0]?.url || null);
-        }
-      }
+      const nextReports = await fetchReports(user.id);
+      setGeneratedReports(nextReports);
+      setLastReportUrl(nextReports[0]?.url || null);
     } catch (reportError) {
-      console.warn("Could not load stored reports:", reportError.message);
+      console.warn("Could not load stored reports:", reportError?.message || reportError);
     }
   }, []);
 
@@ -1751,23 +1920,18 @@ export default function ReportsScreen() {
           {generatedReports.length ? (
             <View style={styles.generatedReportsWrap}>
               <Text style={styles.generatedReportsTitle}>Generated reports</Text>
-              {generatedReports.slice(0, 5).map((item) => (
+              {generatedReports.map((item) => (
                 <Pressable
                   key={item.id || item.filename || item.createdAt}
                   style={styles.generatedReportRow}
-                  onPress={async () => {
-                    if (!item.url) {
-                      Alert.alert("Unavailable", "This report link expired. Generate or email it again.");
-                      return;
-                    }
-                    await WebBrowser.openBrowserAsync(item.url);
-                  }}
+                  onPress={() => openGeneratedReport(item)}
                 >
                   <MaterialCommunityIcons name="file-pdf-box" size={20} color="#ffb49a" />
                   <View style={styles.generatedReportCopy}>
                     <Text style={styles.generatedReportLabel}>{item.label}</Text>
                     <Text style={styles.generatedReportMeta}>
-                      {new Date(item.createdAt).toLocaleString()} - {item.emailStatus || "stored"}
+                      {new Date(item.createdAt).toLocaleString()} -{" "}
+                      {item.unavailable ? "file missing" : item.emailStatus || "stored"}
                     </Text>
                   </View>
                   <Feather name="chevron-right" size={18} color="#92766d" />

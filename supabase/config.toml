@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.scan-receipt-ocr]
 verify_jwt = false
+
+[functions.classify-sms-transaction]
+verify_jwt = false

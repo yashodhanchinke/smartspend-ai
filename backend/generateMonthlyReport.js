@@ -3,20 +3,111 @@ import { google } from 'googleapis';
 import puppeteer from 'puppeteer';
 import './config.js';
 import { supabaseAdmin } from './supabase.js';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const REPORTS_BUCKET = process.env.SUPABASE_REPORTS_BUCKET || 'reports';
+const DEFAULT_TOKEN_CANDIDATES = [
+  path.join(os.homedir(), '.config', 'smartspend-ai', 'gmail_token.json'),
+  path.join('/tmp', 'smartspend-ai', 'gmail_token.json'),
+];
+
+function resolvePrimaryTokenPath() {
+  if (process.env.GMAIL_TOKEN_PATH) return process.env.GMAIL_TOKEN_PATH;
+  return DEFAULT_TOKEN_CANDIDATES[0];
+}
+
+function resolveReadableDefaultTokenPath() {
+  for (const candidate of DEFAULT_TOKEN_CANDIDATES) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return resolvePrimaryTokenPath();
+}
+
+const PRIMARY_TOKEN_PATH = resolvePrimaryTokenPath();
+const DEFAULT_TOKEN_PATH = resolveReadableDefaultTokenPath();
+let sharedBrowser = null;
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GMAIL_CLIENT_ID,
   process.env.GMAIL_CLIENT_SECRET,
-  process.env.GMAIL_REDIRECT_URI || 'urn:ietf:wg:oauth:2.0:oob'
+  process.env.GMAIL_REDIRECT_URI || 'http://localhost:3000'
 );
 
 let hasAuth = false;
-if (process.env.GMAIL_REFRESH_TOKEN) {
+
+function tryLoadTokenFromFile(tokenPath, { label, warnIfLegacy } = {}) {
+  if (!tokenPath || !fs.existsSync(tokenPath)) return false;
+  try {
+    const token = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
+    oauth2Client.setCredentials(token);
+    hasAuth = true;
+
+    if (warnIfLegacy) {
+      console.warn(`[Gmail] Using legacy token file at ${tokenPath}. Consider moving it to ${PRIMARY_TOKEN_PATH} and adding it to .gitignore.`);
+    } else {
+      console.info(`[Gmail] Using authentication from ${label || tokenPath}`);
+    }
+    return true;
+  } catch (err) {
+    console.warn(`[Gmail] Failed to parse token file at ${tokenPath}:`, err.message);
+    return false;
+  }
+}
+
+function ensureTokenDir(tokenPath) {
+  const dir = path.dirname(tokenPath);
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function persistTokenIfMissing(sourcePath) {
+  if (!sourcePath || sourcePath === PRIMARY_TOKEN_PATH) return;
+  if (!oauth2Client.credentials || Object.keys(oauth2Client.credentials).length === 0) return;
+  try {
+    if (fs.existsSync(PRIMARY_TOKEN_PATH)) return;
+    ensureTokenDir(PRIMARY_TOKEN_PATH);
+    fs.writeFileSync(PRIMARY_TOKEN_PATH, JSON.stringify(oauth2Client.credentials), 'utf-8');
+    console.info(`[Gmail] Copied token to ${PRIMARY_TOKEN_PATH} for future runs.`);
+  } catch (err) {
+    console.warn('[Gmail] Failed to persist token to primary path:', err.message);
+  }
+}
+
+// Priority 1: Explicit JSON via env (useful for CI/containers)
+if (process.env.GMAIL_TOKEN_JSON) {
+  try {
+    oauth2Client.setCredentials(JSON.parse(process.env.GMAIL_TOKEN_JSON));
+    hasAuth = true;
+    console.info('[Gmail] Using authentication from GMAIL_TOKEN_JSON');
+  } catch (err) {
+    console.warn('[Gmail] Failed to parse GMAIL_TOKEN_JSON:', err.message);
+  }
+}
+
+// Priority 2: Fallback to env-based refresh token
+if (!hasAuth && process.env.GMAIL_REFRESH_TOKEN) {
   oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
   hasAuth = true;
+  console.info('[Gmail] Using authentication from environment variables');
+}
+
+// Priority 3: Token file outside the repo (default)
+if (!hasAuth) {
+  // Prefer explicit path, but also allow the default candidate that actually exists.
+  if (!tryLoadTokenFromFile(PRIMARY_TOKEN_PATH, { label: 'GMAIL_TOKEN_PATH' })) {
+    tryLoadTokenFromFile(DEFAULT_TOKEN_PATH, { label: 'default token path' });
+  }
+}
+
+// Priority 4: Legacy in-repo paths (migration only)
+if (!hasAuth) {
+  const legacyCwdToken = path.join(process.cwd(), 'token.json');
+  const legacyBackendToken = path.join(process.cwd(), 'backend', 'token.json');
+
+  if (tryLoadTokenFromFile(legacyCwdToken, { warnIfLegacy: true })) persistTokenIfMissing(legacyCwdToken);
+  else if (tryLoadTokenFromFile(legacyBackendToken, { warnIfLegacy: true })) persistTokenIfMissing(legacyBackendToken);
 }
 
 const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
@@ -35,7 +126,28 @@ function formatDateKey(date) {
   return new Date(date).toISOString().split('T')[0];
 }
 
-function getDateRangeForInputs({ month, rangeDays }) {
+function getDateRangeForInputs({ month, rangeDays, customStartDate, customEndDate }) {
+  if (customStartDate && customEndDate) {
+    const parsedStart = new Date(customStartDate);
+    const parsedEnd = new Date(customEndDate);
+
+    if (Number.isNaN(parsedStart.getTime()) || Number.isNaN(parsedEnd.getTime())) {
+      throw new Error('Invalid custom date range.');
+    }
+
+    const start = new Date(Date.UTC(parsedStart.getUTCFullYear(), parsedStart.getUTCMonth(), parsedStart.getUTCDate()));
+    const endInclusive = new Date(Date.UTC(parsedEnd.getUTCFullYear(), parsedEnd.getUTCMonth(), parsedEnd.getUTCDate()));
+    const endExclusive = new Date(endInclusive);
+    endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+
+    return {
+      startDate: formatDateKey(start),
+      endDate: formatDateKey(endExclusive),
+      reportLabel: `custom-${formatDateKey(start)}-to-${formatDateKey(endInclusive)}`,
+      displayLabel: `${formatDateKey(start)} to ${formatDateKey(endInclusive)}`,
+    };
+  }
+
   if (month) {
     const [yearStr, monthStr] = month.split('-');
     const startDate = `${month}-01`;
@@ -81,7 +193,7 @@ async function generateInsightsJson({ prompt }) {
     const groqKey = process.env.GROQ_API_KEY;
     if (!groqKey) throw geminiError;
 
-    const groqModel = process.env.GROQ_MODEL || 'llama-3.1-70b-versatile';
+    const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
     const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -111,6 +223,28 @@ async function generateInsightsJson({ prompt }) {
     const content = data?.choices?.[0]?.message?.content;
     return JSON.parse(String(content || '').trim());
   }
+}
+
+function withTimeout(promise, timeoutMs, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+    ),
+  ]);
+}
+
+async function getSharedBrowser() {
+  if (sharedBrowser) {
+    return sharedBrowser;
+  }
+
+  sharedBrowser = await puppeteer.launch({
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  });
+
+  return sharedBrowser;
 }
 
 function createRawMessage(to, subject, text, attachmentData, pdfName) {
@@ -439,6 +573,7 @@ export async function listStoredReports({
       is_automatic: item.is_automatic,
       generated_for_month: item.generated_for_month,
       report_url: reportUrl,
+      storage_path: item.storage_path,
     });
   }
 
@@ -491,6 +626,10 @@ export async function generateAndSendReport({
   userEmail,
   month,
   rangeDays,
+  customStartDate,
+  customEndDate,
+  accountIds = [],
+  categoryIds = [],
   transactionsOverride,
   reportLabelOverride,
   sendEmail = false,
@@ -500,27 +639,43 @@ export async function generateAndSendReport({
   generatedForMonth,
 }) {
   try {
-    const { startDate, endDate, reportLabel, displayLabel } = getDateRangeForInputs({ month, rangeDays });
+    const { startDate, endDate, reportLabel, displayLabel } = getDateRangeForInputs({
+      month,
+      rangeDays,
+      customStartDate,
+      customEndDate,
+    });
 
     let transactions = [];
     if (Array.isArray(transactionsOverride)) {
       transactions = transactionsOverride;
     } else {
-      const [{ data: transactionsRaw, error }, { data: accountRows, error: accountError }] = await Promise.all([
-        supabaseAdmin
-          .from('transactions')
-          .select(`
+      let transactionQuery = supabaseAdmin
+        .from('transactions')
+        .select(`
             *,
             categories(name,icon,color,type),
             to_account:to_account_id(name)
           `)
-          .eq('user_id', userId)
-          .gte('date', startDate)
-          .lt('date', endDate)
-          .order('date', { ascending: false })
-          .order('time', { ascending: false }),
-        supabaseAdmin.from('accounts').select('id,name,type,color,icon').eq('user_id', userId),
-      ]);
+        .eq('user_id', userId)
+        .gte('date', startDate)
+        .lt('date', endDate)
+        .order('date', { ascending: false })
+        .order('time', { ascending: false });
+
+      if (Array.isArray(accountIds) && accountIds.length) {
+        transactionQuery = transactionQuery.in('account_id', accountIds);
+      }
+
+      if (Array.isArray(categoryIds) && categoryIds.length) {
+        transactionQuery = transactionQuery.in('category_id', categoryIds);
+      }
+
+      const [{ data: transactionsRaw, error }, { data: accountRows, error: accountError }] =
+        await Promise.all([
+          transactionQuery,
+          supabaseAdmin.from('accounts').select('id,name,type,color,icon').eq('user_id', userId),
+        ]);
 
       if (error) throw error;
       if (accountError) throw accountError;
@@ -619,7 +774,7 @@ export async function generateAndSendReport({
       `;
 
       try {
-        aiData = await generateInsightsJson({ prompt });
+        aiData = await withTimeout(generateInsightsJson({ prompt }), 12000, 'AI insights');
       } catch (aiError) {
         console.error('AI insights generation error:', aiError);
         aiData = {
@@ -644,40 +799,45 @@ export async function generateAndSendReport({
       recentTransactions,
     });
 
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-
+    const browser = await getSharedBrowser();
     const page = await browser.newPage();
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-    const pdfBuffer = Buffer.from(
-      await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        preferCSSPageSize: false,
-        margin: { top: '16mm', right: '16mm', bottom: '16mm', left: '16mm' },
-      })
-    );
-    await browser.close();
+    let pdfBuffer;
+    try {
+      await page.setContent(htmlContent, { waitUntil: 'domcontentloaded' });
+      pdfBuffer = Buffer.from(
+        await page.pdf({
+          format: 'A4',
+          printBackground: true,
+          preferCSSPageSize: false,
+          margin: { top: '16mm', right: '16mm', bottom: '16mm', left: '16mm' },
+        })
+      );
+    } finally {
+      await page.close();
+    }
 
     const safeUserId = sanitizeLabel(userId, 'user');
     const safeLabel = sanitizeLabel(reportLabelOverride || reportLabel, 'report');
     const filename = `report-${safeUserId}-${safeLabel}.pdf`;
-    const storagePath = await uploadReportToStorage({ userId, filename, pdfBuffer });
-
-    let emailStatus = 'skipped';
     const recipientEmail = String(emailToOverride || userEmail || '').trim();
-    if (sendEmail && recipientEmail) {
-      await sendPdfEmail({
-        pdfBuffer,
-        toEmail: recipientEmail,
-        subject: `Your SmartSpend Report - ${displayLabel}`,
-        text: `Hi,\n\nPlease find attached your SmartSpend report for ${displayLabel}.\n\nAI Insights:\n${aiData.summary}\n\nBest,\nSmartSpend AI`,
-        attachmentName: filename,
-      });
-      emailStatus = 'success';
-    }
+    const uploadPromise = uploadReportToStorage({ userId, filename, pdfBuffer });
+    const emailPromise =
+      sendEmail && recipientEmail
+        ? withTimeout(
+            sendPdfEmail({
+              pdfBuffer,
+              toEmail: recipientEmail,
+              subject: `Your SmartSpend Report - ${displayLabel}`,
+              text: `Hi,\n\nPlease find attached your SmartSpend report for ${displayLabel}.\n\nAI Insights:\n${aiData.summary}\n\nBest,\nSmartSpend AI`,
+              attachmentName: filename,
+            }),
+            20000,
+            'Email send'
+          )
+        : Promise.resolve();
+
+    const [storagePath] = await Promise.all([uploadPromise, emailPromise]);
+    const emailStatus = sendEmail && recipientEmail ? 'success' : 'skipped';
 
     const reportRecord = await storeReportMetadata({
       userId,

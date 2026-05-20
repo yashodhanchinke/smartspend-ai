@@ -1,84 +1,93 @@
 const BANK_RULES = [
   {
     name: "HDFC Bank",
-    aliases: ["hdfc", "hdfc bank"],
-    senderHints: ["hdfcbk", "hdfc", "hdfcbank"],
+    aliases: ["hdfc", "hdfc bank", "hdfcbk"],
+    senderHints: ["hdfcbk", "hdfc", "hdfcbank", "hdfcrd", "hdfccr"],
   },
   {
     name: "ICICI Bank",
-    aliases: ["icici", "icici bank"],
-    senderHints: ["icicib", "icicit", "icici", "icicibank"],
+    aliases: ["icici", "icici bank", "icicibk"],
+    senderHints: ["icicib", "icicit", "icici", "icicibank", "icicic", "icicrd"],
   },
   {
     name: "State Bank of India",
-    aliases: ["sbi", "state bank", "state bank of india"],
-    senderHints: ["sbiinb", "sbipsg", "cbssbi", "sbibnk", "sbi", "sbind"],
+    aliases: ["sbi", "state bank", "state bank of india", "sbin"],
+    senderHints: ["sbiinb", "sbipsg", "cbssbi", "sbibnk", "sbi", "sbind", "sbin"],
   },
   {
     name: "Axis Bank",
-    aliases: ["axis", "axis bank"],
-    senderHints: ["axisbk", "axis", "axisbn"],
+    aliases: ["axis", "axis bank", "axisbk"],
+    senderHints: ["axisbk", "axis", "axisbn", "axiscr"],
   },
   {
     name: "Kotak Mahindra Bank",
-    aliases: ["kotak", "kotak bank", "kotak mahindra"],
-    senderHints: ["kotakb", "kotak", "ktkbnk"],
+    aliases: ["kotak", "kotak bank", "kotak mahindra", "kmbl"],
+    senderHints: ["kotakb", "kotak", "ktkbnk", "kmbl"],
   },
   {
     name: "Punjab National Bank",
-    aliases: ["pnb", "punjab national bank"],
-    senderHints: ["pnb", "pnbsms"],
+    aliases: ["pnb", "punjab national bank", "punjab national"],
+    senderHints: ["pnb", "pnbsms", "pnbbnk"],
   },
   {
     name: "Bank of Maharashtra",
-    aliases: [
-      "bank of maharashtra",
-      "maharashtra bank",
-      "mahabank",
-      "mahabk",
-      "bom",
-    ],
-    senderHints: ["mahabk", "mahabank", "bankofmaharashtra"],
+    aliases: ["bank of maharashtra", "maharashtra bank", "mahabank", "mahabk", "bom"],
+    senderHints: ["mahabk", "mahabank", "bankofmaharashtra", "bom"],
   },
   {
     name: "Bank of Baroda",
-    aliases: ["bob", "bank of baroda"],
-    senderHints: ["bankbd", "baroda", "bob"],
+    aliases: ["bob", "bank of baroda", "baroda bank", "baroda"],
+    senderHints: ["bankbd", "baroda", "bob", "bobcr"],
   },
   {
     name: "Canara Bank",
-    aliases: ["canara", "canara bank"],
-    senderHints: ["canbnk", "canara"],
+    aliases: ["canara", "canara bank", "can bank"],
+    senderHints: ["canbnk", "canara", "canbnc"],
   },
   {
     name: "Union Bank",
-    aliases: ["union bank", "union"],
-    senderHints: ["unionb", "unionbk"],
+    aliases: ["union bank", "union", "union bank of india", "ubi"],
+    senderHints: ["unionb", "unionbk", "ubi"],
   },
   {
     name: "IDFC First Bank",
-    aliases: ["idfc", "idfc first", "idfc first bank"],
-    senderHints: ["idfcbk", "idfcfb"],
+    aliases: ["idfc", "idfc first", "idfc first bank", "idfc bank"],
+    senderHints: ["idfcbk", "idfcfb", "idfc"],
   },
   {
     name: "IndusInd Bank",
-    aliases: ["indusind", "indusind bank"],
-    senderHints: ["indusb", "indusind"],
+    aliases: ["indusind", "indusind bank", "indus"],
+    senderHints: ["indusb", "indusind", "indus"],
   },
   {
     name: "Yes Bank",
-    aliases: ["yes bank", "yesbank"],
+    aliases: ["yes bank", "yesbank", "yes"],
     senderHints: ["yesbnk", "yesbank"],
   },
   {
     name: "AU Small Finance Bank",
-    aliases: ["au bank", "au small finance", "au small finance bank"],
+    aliases: ["au bank", "au small finance", "au small finance bank", "au sfb"],
     senderHints: ["aubank", "ausfb"],
   },
   {
     name: "Federal Bank",
     aliases: ["federal bank", "federal"],
     senderHints: ["fedbnk", "federal"],
+  },
+  {
+    name: "Indian Bank",
+    aliases: ["indian bank", "indian"],
+    senderHints: ["indbnk", "indianbank"],
+  },
+  {
+    name: "Central Bank of India",
+    aliases: ["central bank", "central bank of india", "cbi"],
+    senderHints: ["cenbnk", "cbi"],
+  },
+  {
+    name: "South Indian Bank",
+    aliases: ["south indian bank", "sib"],
+    senderHints: ["sibset", "sib"],
   },
 ];
 
@@ -119,9 +128,15 @@ function extractSenderTokens(value) {
   const embeddedMatches = compactSender.match(/[a-z]{2}[a-z]{6}[a-z]?/g) || [];
 
   embeddedMatches.forEach((match) => {
-    const core = match.slice(2, 8);
+    // Standard Indian headers are length 6-8, starting after 2-char prefix
+    const core = match.slice(2, 8); 
     if (core) {
       tokens.add(core);
+    }
+    // Also try 3-5 char codes which are common (SBI, AXIS, etc.)
+    const short = match.slice(2, 5);
+    if (short) {
+      tokens.add(short);
     }
 
     tokens.add(match);
@@ -130,9 +145,20 @@ function extractSenderTokens(value) {
   return Array.from(tokens);
 }
 
-function accountMatchesRule(account, rule) {
+export function accountMatchesRule(account, rule) {
   const accountName = normalize(account?.name);
-  return rule.aliases.some((alias) => accountName.includes(alias));
+  if (!accountName) return false;
+
+  // 1. Literal match or containment (e.g. "HDFC Bank" matches "hdfc")
+  const primaryMatch = rule.aliases.some((alias) => accountName.includes(alias));
+  if (primaryMatch) return true;
+
+  // 2. Reverse containment (e.g. "SBI" matches "State Bank of India")
+  // We check if the account name is a substring of any long alias
+  const reverseMatch = rule.aliases.some((alias) => alias.includes(accountName) && accountName.length >= 2);
+  if (reverseMatch) return true;
+
+  return false;
 }
 
 export function getEnabledBankRules(accounts = []) {

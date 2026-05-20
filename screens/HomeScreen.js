@@ -12,11 +12,13 @@ import {
   View
 } from "react-native";
 import LoanSettlementModal from "../components/LoanSettlementModal";
+import NotificationBell from "../components/NotificationBell";
 import { SafeAreaView } from "react-native-safe-area-context";
 import CalendarHeatmap from "../components/CalendarHeatmap";
 import TransactionListItem from "../components/TransactionListItem";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
+import { buildBudgetInsights } from "../util/budgetInsights";
 import { getDuePendingLoans, settleLoan } from "../util/loanSettlement";
 import { showTransactionEntryOptions } from "../util/transactionEntry";
 
@@ -82,6 +84,7 @@ export default function HomeScreen({ navigation, route }) {
   const [username, setUsername] = useState("");
   const [categoryCount, setCategoryCount] = useState(0);
   const [topCategories, setTopCategories] = useState([]);
+  const [budgetInsights, setBudgetInsights] = useState([]);
   const [refreshKey, setRefreshKey] = useState(0);
   const [showAmounts, setShowAmounts] = useState(true);
   const [lastMonthIncome, setLastMonthIncome] = useState(0);
@@ -133,7 +136,7 @@ export default function HomeScreen({ navigation, route }) {
       if (!user || !isMounted) return;
 
       channel = supabase
-        .channel(`home-dashboard-${user.id}`)
+        .channel(`user-realtime-${user.id}`)
         .on(
           "postgres_changes",
           {
@@ -159,11 +162,30 @@ export default function HomeScreen({ navigation, route }) {
           }
         )
         .on(
+          "broadcast",
+          { event: "refresh" },
+          () => {
+            fetchDashboardRef.current();
+          }
+        )
+        .on(
           "postgres_changes",
           {
             event: "*",
             schema: "public",
             table: "categories",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchDashboardRef.current();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "budgets",
             filter: `user_id=eq.${user.id}`,
           },
           () => {
@@ -206,7 +228,6 @@ export default function HomeScreen({ navigation, route }) {
   }, []);
 
   const fetchDashboard = useCallback(async () => {
-
     const {
       data: { user },
     } = await supabase.auth.getUser();
@@ -217,34 +238,16 @@ export default function HomeScreen({ navigation, route }) {
 
     await refreshDueLoanPrompt(user.id);
 
-    /* PROFILE */
-
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("name")
-      .eq("id", user.id)
-      .single();
-
-    if (profile) setUsername(profile.name);
-
-    /* ACCOUNTS */
-
-    const { data: accounts } = await supabase
-      .from("accounts")
-      .select("balance")
-      .eq("user_id", user.id);
-
-    let balanceTotal = 0;
-
-    accounts?.forEach((a) => {
-      balanceTotal += Number(a.balance);
-    });
-
-    setTotalBalance(balanceTotal);
-
-    /* RECENT TRANSACTIONS */
-
-    const [{ data: tx }, { data: accountRows }] = await Promise.all([
+    const [
+      { data: profile },
+      { data: accounts },
+      { data: tx },
+      { data: accountRows },
+      budgetsResult,
+      categoriesResult,
+    ] = await Promise.all([
+      supabase.from("profiles").select("name").eq("id", user.id).single(),
+      supabase.from("accounts").select("id,name,balance").eq("user_id", user.id),
       supabase
         .from("transactions")
         .select(`
@@ -256,35 +259,66 @@ export default function HomeScreen({ navigation, route }) {
         .order("time", { ascending: false })
         .order("created_at", { ascending: false }),
       supabase.from("accounts").select("id,name").eq("user_id", user.id),
+      supabase
+        .from("budgets")
+        .select(`
+          id,
+          name,
+          amount,
+          spent,
+          period,
+          color,
+          mode,
+          budget_type,
+          notes,
+          category_id,
+          budget_categories (
+            category_id,
+            categories (
+              id,
+              name,
+              icon,
+              color
+            )
+          )
+        `)
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false }),
+      supabase.from("categories").select("id,name,icon,color,type").eq("user_id", user.id),
     ]);
 
+    if (profile) setUsername(profile.name);
+
+    let balanceTotal = 0;
+
+    accounts?.forEach((a) => {
+      balanceTotal += Number(a.balance);
+    });
+
+    setTotalBalance(balanceTotal);
+
     const accountMap = Object.fromEntries((accountRows || []).map((account) => [account.id, account]));
+    const allTransactions = (tx || []).sort(compareTransactionsByDateTimeDesc);
+    const categories = categoriesResult.data || [];
+    const budgets = budgetsResult.data || [];
 
     setTransactions(
-      (tx || [])
+      allTransactions
         .map((transaction) => ({
           ...transaction,
           account: accountMap[transaction.account_id] || null,
         }))
-        .sort(compareTransactionsByDateTimeDesc)
     );
 
-    const { data: weeklySourceTransactions } = await supabase
-      .from("transactions")
-      .select("amount,type,date")
-      .eq("user_id", user.id)
-      .order("date", { ascending: false })
-      .limit(180);
-
-    const latestTransactionDate = weeklySourceTransactions?.length
-      ? parseStoredDate(weeklySourceTransactions[0].date)
+    const latestTransactionDate = allTransactions.length
+      ? parseStoredDate(allTransactions[0].date)
       : new Date();
 
     const startOfWeek = getMondayOfWeek(latestTransactionDate);
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(startOfWeek.getDate() + 6);
 
-    const weekTransactions = (weeklySourceTransactions || []).filter((transaction) => {
+    const weekTransactions = allTransactions.filter((transaction) => {
       const txDate = parseStoredDate(transaction.date);
       return txDate >= startOfWeek && txDate <= endOfWeek;
     });
@@ -365,19 +399,12 @@ export default function HomeScreen({ navigation, route }) {
     const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
-    const { data: monthTransactions } = await supabase
-      .from("transactions")
-      .select("amount,type,date")
-      .eq("user_id", user.id)
-      .gte("date", startOfLastMonth.toISOString().split("T")[0])
-      .lt("date", startOfNextMonth.toISOString().split("T")[0]);
-
     let inc = 0;
     let exp = 0;
     let prevInc = 0;
     let prevExp = 0;
 
-    monthTransactions?.forEach((t) => {
+    allTransactions.forEach((t) => {
       const txDate = new Date(t.date);
       const isThisMonth = txDate >= startOfThisMonth && txDate < startOfNextMonth;
       const isLastMonth = txDate >= startOfLastMonth && txDate < startOfThisMonth;
@@ -397,39 +424,23 @@ export default function HomeScreen({ navigation, route }) {
     setLastMonthIncome(prevInc);
     setLastMonthExpense(prevExp);
 
-    /* CATEGORY SUMMARY */
-
-    const { data: categories } = await supabase
-      .from("categories")
-      .select("id")
-      .eq("user_id", user.id);
-
     setCategoryCount(categories?.length || 0);
-
-    const { data: expenseTransactions } = await supabase
-      .from("transactions")
-      .select(`
-        amount,
-        category_id,
-        categories(name,icon,color)
-      `)
-      .eq("user_id", user.id)
-      .eq("type", "expense")
-      .not("category_id", "is", null);
-
+    const categoryMap = Object.fromEntries((categories || []).map((category) => [category.id, category]));
     const totalsByCategory = {};
 
-    expenseTransactions?.forEach((item) => {
-      const key = item.category_id;
+    allTransactions.forEach((item) => {
+      if (item.type !== "expense" || !item.category_id) {
+        return;
+      }
 
-      if (!key) return;
+      const key = item.category_id;
 
       if (!totalsByCategory[key]) {
         totalsByCategory[key] = {
           id: key,
-          name: item.categories?.name || "Category",
-          icon: item.categories?.icon || "tag",
-          color: item.categories?.color || "#a05c3b",
+          name: categoryMap[key]?.name || item.categories?.name || "Category",
+          icon: categoryMap[key]?.icon || item.categories?.icon || "tag",
+          color: categoryMap[key]?.color || item.categories?.color || "#a05c3b",
           total: 0,
         };
       }
@@ -441,6 +452,15 @@ export default function HomeScreen({ navigation, route }) {
       Object.values(totalsByCategory)
         .sort((a, b) => b.total - a.total)
         .slice(0, 3)
+    );
+
+    setBudgetInsights(
+      buildBudgetInsights({
+        budgets,
+        transactions: allTransactions,
+        categories,
+        now,
+      })
     );
     setRefreshKey((current) => current + 1);
   }, [refreshDueLoanPrompt]);
@@ -557,9 +577,13 @@ export default function HomeScreen({ navigation, route }) {
 
           </View>
 
-          <TouchableOpacity style={styles.profilePic}>
-            <Feather name="user" size={22} color={colors.text} />
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            <NotificationBell />
+
+            <TouchableOpacity style={styles.profilePic} onPress={() => navigation.navigate("Profile")}>
+              <Feather name="user" size={22} color={colors.text} />
+            </TouchableOpacity>
+          </View>
 
         </View>
 
@@ -636,8 +660,8 @@ export default function HomeScreen({ navigation, route }) {
             icon="bar-chart"
             title="Budgets"
             navigation={navigation}
-            bodyIcon="bar-chart-2"
-            bodyText="No budgets set"
+            variant="budget"
+            budgetInsights={budgetInsights}
           />
           <SectionCard
             icon="pie-chart"
@@ -762,6 +786,7 @@ export default function HomeScreen({ navigation, route }) {
 
 function SectionCard({
   amount,
+  budgetInsights,
   categoryCount,
   bodyIcon,
   bodyText,
@@ -775,6 +800,32 @@ function SectionCard({
 }) {
 
   const renderBody = () => {
+    if (variant === "budget") {
+      const trackedBudgets = budgetInsights || [];
+      const strongestBudget = [...trackedBudgets].sort((left, right) => right.progress - left.progress)[0];
+
+      if (!trackedBudgets.length) {
+        return (
+          <View style={styles.sectionBody}>
+            <Feather name={bodyIcon || "bar-chart-2"} size={46} color="#cbb8b1" />
+            <Text style={styles.sectionBodyText}>No budgets set</Text>
+          </View>
+        );
+      }
+
+      return (
+        <View style={styles.sectionAnalyticsBody}>
+          <Text style={styles.sectionSmallLabel}>Active budgets</Text>
+          <Text style={styles.sectionAmount}>{trackedBudgets.length}</Text>
+          <Text style={styles.sectionTrendNeutral}>
+            {strongestBudget
+              ? `${strongestBudget.name || "Budget"} is at ${Math.round((strongestBudget.progress || 0) * 100)}%`
+              : "Track how your limits are moving"}
+          </Text>
+        </View>
+      );
+    }
+
     if (variant === "analytics") {
       return (
         <View style={styles.sectionAnalyticsBody}>
@@ -941,6 +992,12 @@ const styles = StyleSheet.create({
   headerTextWrap: {
     flex: 1,
     marginRight: 16,
+  },
+
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
   },
 
   username: {

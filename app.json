@@ -19,6 +19,7 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
         "android.permission.READ_SMS",
         "android.permission.RECEIVE_SMS",
         "android.permission.RECORD_AUDIO",
@@ -35,6 +36,13 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/android-icon-monochrome.png",
+          "color": "#ffcc99"
+        }
+      ],
       [
         "expo-image-picker",
         {

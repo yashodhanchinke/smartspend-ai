@@ -199,6 +199,46 @@ export default function TransactionsScreen({ navigation, route }) {
     }, [fetchTransactions])
   );
 
+  useEffect(() => {
+    let channel;
+
+    const subscribe = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      channel = supabase
+        .channel(`user-realtime-${user.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "transactions",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchTransactions();
+          }
+        )
+        .on(
+          "broadcast",
+          { event: "refresh" },
+          () => {
+            fetchTransactions();
+          }
+        )
+        .subscribe();
+    };
+
+    subscribe();
+
+    return () => {
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [fetchTransactions]);
+
   const groupedTransactions = useMemo(() => {
     const groups = new Map();
     const sourceTransactions =

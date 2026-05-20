@@ -98,3 +98,101 @@ Now that everything is installed, you are ready to start the app!
 
 ---
 Happy Coding! 🎉
+
+npx expo start --dev-client.
+
+---
+
+## Reliable Report API Over Mobile Data (Cloudflared / Ngrok)
+
+If your phone is on mobile data (not same Wi-Fi as laptop), local backend URL like `http://192.168.x.x:3000` will fail.
+Use a public tunnel and set `EXPO_PUBLIC_API_URL` to that tunnel URL.
+
+### 1) Start backend
+
+```bash
+npm run backend:start
+```
+
+### 2) Start one tunnel (new terminal)
+
+Cloudflared:
+
+```bash
+npm run tunnel:cloudflared
+```
+
+Ngrok:
+
+```bash
+npm run tunnel:ngrok
+```
+
+Copy the `https://...` URL shown by tunnel output.
+
+### 3) Set Expo API URL
+
+```bash
+bash scripts/set-expo-api-url.sh https://YOUR_TUNNEL_URL
+```
+
+### 4) Restart app bundler
+
+```bash
+npm run start:devclient
+```
+
+### Recommended 3-terminal run flow
+
+Terminal 1 (backend):
+
+```bash
+cd ~/smartspend-ai/backend
+npm start
+```
+
+Terminal 2 (tunnel):
+
+```bash
+cd ~/smartspend-ai
+ngrok http 3000
+```
+
+Copy the `https://...ngrok...` forwarding URL.
+
+Terminal 3 (app):
+
+```bash
+cd ~/smartspend-ai
+bash scripts/set-expo-api-url.sh https://YOUR_NGROK_URL
+npm run start:devclient
+```
+
+Notes:
+- Keep backend + tunnel terminals open.
+- If ngrok URL changes, run `set-expo-api-url.sh` again and restart Expo.
+- Health check:
+  - local: `http://localhost:3000/api/health`
+  - tunnel: `https://YOUR_NGROK_URL/api/health`
+
+### API key guidance (Gemini + Groq)
+
+- Keep `GEMINI_API_KEY` and `GROQ_API_KEY` only in backend/root `.env` (server side).
+- Do not expose them as `EXPO_PUBLIC_*`.
+- If report generation feels slow, backend automatically falls back from Gemini to Groq when needed.
+- Network errors for report/email are usually backend URL reachability issues, not Gemini/Groq key issues.
+
+---
+
+## Automatic Month-End Report Email
+
+Automatic monthly report email is enabled in backend scheduler.
+
+Behavior:
+- On the last calendar day of month (Asia/Kolkata), backend generates that month report and emails user.
+- Example: March report is generated/sent on March 31.
+- Safety catch-up: if backend was down on month-end, it retries previous month on day 1.
+- Duplicate prevention is enabled (`is_automatic + generated_for_month` uniqueness), so it won’t send the same month twice.
+
+Important:
+- Backend must be running continuously for scheduler to execute automatically.

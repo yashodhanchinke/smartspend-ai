@@ -8,6 +8,7 @@ import FloatingButton from "../components/FloatingButton";
 import ScreenHeader from "../components/ScreenHeader";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
+import { buildBudgetInsights, loadBudgetNotificationContext } from "../util/budgetInsights";
 
 export default function BudgetsScreen({ navigation }) {
   const [budgets, setBudgets] = useState([]);
@@ -22,38 +23,15 @@ export default function BudgetsScreen({ navigation }) {
       return;
     }
 
-    const { data, error } = await supabase
-      .from("budgets")
-      .select(`
-        id,
-        name,
-        amount,
-        spent,
-        period,
-        color,
-        mode,
-        budget_type,
-        notes,
-        budget_categories (
-          category_id,
-          categories (
-            id,
-            name,
-            icon,
-            color
-          )
-        )
-      `)
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
+    try {
+      const context = await loadBudgetNotificationContext(user.id);
+      const nextBudgets = buildBudgetInsights(context);
 
-    if (error) {
+      setBudgets(nextBudgets);
+    } catch (error) {
       console.warn("Could not load budgets:", error.message);
       setBudgets([]);
-      return;
     }
-
-    setBudgets(data || []);
   }, []);
 
   useFocusEffect(
@@ -78,11 +56,9 @@ export default function BudgetsScreen({ navigation }) {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.listContent}>
           {budgets.map((budget) => {
             const amount = Number(budget.amount || 0);
-            const spent = Number(budget.spent || 0);
-            const progress = amount > 0 ? Math.min(spent / amount, 1) : 0;
-            const linkedCategories = (budget.budget_categories || [])
-              .map((entry) => entry.categories)
-              .filter(Boolean);
+            const spent = Number(budget.liveSpent || 0);
+            const progress = amount > 0 ? Math.min(budget.progress || 0, 1) : 0;
+            const linkedCategories = budget.linkedCategories || [];
             const leadCategory = linkedCategories[0];
 
             return (

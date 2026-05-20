@@ -112,6 +112,75 @@ CREATE TABLE public.labels (
   CONSTRAINT labels_pkey PRIMARY KEY (id),
   CONSTRAINT labels_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
 );
+CREATE TABLE public.notification_preferences (
+  user_id uuid NOT NULL,
+  push_enabled boolean NOT NULL DEFAULT false,
+  push_permission_status text NOT NULL DEFAULT 'unknown'::text,
+  expo_push_token text,
+  language_mode text NOT NULL DEFAULT 'hinglish'::text,
+  last_generated_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  CONSTRAINT notification_preferences_pkey PRIMARY KEY (user_id),
+  CONSTRAINT notification_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT notification_preferences_language_mode_check CHECK ((language_mode = ANY (ARRAY['english'::text, 'hinglish'::text])))
+);
+ALTER TABLE public.notification_preferences ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own notification preferences"
+ON public.notification_preferences
+FOR SELECT
+TO authenticated
+USING (auth.uid() = user_id);
+CREATE POLICY "Users can insert their own notification preferences"
+ON public.notification_preferences
+FOR INSERT
+TO authenticated
+WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users can update their own notification preferences"
+ON public.notification_preferences
+FOR UPDATE
+TO authenticated
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
+CREATE TABLE public.notifications (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  fingerprint text NOT NULL,
+  title text NOT NULL,
+  body text NOT NULL,
+  tone text NOT NULL DEFAULT 'attention'::text,
+  language text NOT NULL DEFAULT 'hinglish'::text,
+  kind text NOT NULL DEFAULT 'nudge'::text,
+  source_module text,
+  source_entity_type text,
+  source_entity_id uuid,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT timezone('utc'::text, now()),
+  read_at timestamp with time zone,
+  expires_at timestamp with time zone,
+  push_attempted_at timestamp with time zone,
+  push_sent_at timestamp with time zone,
+  push_error text,
+  CONSTRAINT notifications_pkey PRIMARY KEY (id),
+  CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT notifications_user_fingerprint_unique UNIQUE (user_id, fingerprint)
+);
+CREATE INDEX notifications_user_created_at_idx
+ON public.notifications (user_id, created_at DESC);
+CREATE INDEX notifications_user_read_expiry_idx
+ON public.notifications (user_id, read_at, expires_at);
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own notifications"
+ON public.notifications
+FOR SELECT
+TO authenticated
+USING (auth.uid() = user_id);
+CREATE POLICY "Users can update their own notifications"
+ON public.notifications
+FOR UPDATE
+TO authenticated
+USING (auth.uid() = user_id)
+WITH CHECK (auth.uid() = user_id);
 CREATE TABLE public.loans (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid,

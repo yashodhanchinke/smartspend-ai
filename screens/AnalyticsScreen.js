@@ -253,7 +253,7 @@ export default function AnalyticsScreen() {
             .select("id,insight_type,message,created_at")
             .eq("user_id", user.id)
             .order("created_at", { ascending: false })
-            .limit(5),
+            .limit(1),
         ]);
 
       if (transactionError) {
