@@ -16,10 +16,12 @@ import BottomTabs from "./BottomTabs";
 
 import AddAccountScreen from "../screens/AddAccountScreen";
 import AddBudgetScreen from "../screens/AddBudgetScreen";
+import BudgetDetailsScreen from "../screens/BudgetDetailsScreen";
 import AddCategoryScreen from "../screens/AddCategoryScreen";
 import AddGoalScreen from "../screens/AddGoalScreen";
 import AddLabelScreen from "../screens/AddLabelScreen";
 import AddLoanScreen from "../screens/AddLoanScreen";
+import LoanDetailsScreen from "../screens/LoanDetailsScreen";
 import AddRecurringScreen from "../screens/AddRecurringScreen";
 import AddTransactionScreen from "../screens/AddTransactionScreen";
 import AnalyticsScreen from "../screens/AnalyticsScreen";
@@ -149,6 +151,7 @@ export default function AppNavigator() {
             <Stack.Screen name="CategoryDetails" component={CategoryDetailsScreen} />
 
             <Stack.Screen name="Budgets" component={BudgetsScreen} />
+            <Stack.Screen name="BudgetDetails" component={BudgetDetailsScreen} />
             <Stack.Screen name="AddBudget" component={AddBudgetScreen} />
             <Stack.Screen name="UpdateBudget" component={AddBudgetScreen} />
             <Stack.Screen name="Goals" component={GoalsScreen} />
@@ -162,6 +165,7 @@ export default function AppNavigator() {
             <Stack.Screen name="UpdateLabel" component={AddLabelScreen} />
             <Stack.Screen name="AddLoan" component={AddLoanScreen} />
             <Stack.Screen name="UpdateLoan" component={AddLoanScreen} />
+            <Stack.Screen name="LoanDetails" component={LoanDetailsScreen} />
             <Stack.Screen name="AddRecurring" component={AddRecurringScreen} />
             <Stack.Screen name="UpdateRecurring" component={AddRecurringScreen} />
             <Stack.Screen name="Analytics" component={AnalyticsScreen} />

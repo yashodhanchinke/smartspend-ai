@@ -369,6 +369,12 @@ export default function CalendarHeatmapScreen({ navigation }) {
               categoryColor={transaction.categories?.color || "#5a4138"}
               categoryIcon={transaction.categories?.icon || "credit-card-outline"}
               showDivider={index !== selectedTransactions.length - 1}
+              onPress={() =>
+                navigation.navigate("UpdateTransaction", {
+                  transaction,
+                  returnTab: "Home",
+                })
+              }
             />
           ))
         )}

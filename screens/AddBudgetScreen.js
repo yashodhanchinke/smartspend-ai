@@ -58,6 +58,7 @@ const BUDGET_PERIODS = [
   { key: "daily", title: "Daily", description: "Budget resets every day" },
   { key: "weekly", title: "Weekly", description: "Budget resets every week" },
   { key: "monthly", title: "Monthly", description: "Budget resets every month" },
+  { key: "quarterly", title: "Quarterly", description: "Budget resets every 3 months" },
   { key: "yearly", title: "Yearly", description: "Budget resets every year" },
 ];
 

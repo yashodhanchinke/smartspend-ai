@@ -63,6 +63,10 @@ const isSameDate = (left, right) =>
 export default function HomeScreen({ navigation, route }) {
 
   const [transactions, setTransactions] = useState([]);
+  const [goals, setGoals] = useState([]);
+  const [loans, setLoans] = useState([]);
+  const [labelSummaries, setLabelSummaries] = useState([]);
+  const [recurringTransactions, setRecurringTransactions] = useState([]);
   const [weeklySummary, setWeeklySummary] = useState({
     count: 0,
     highestDay: "None",
@@ -204,6 +208,54 @@ export default function HomeScreen({ navigation, route }) {
             fetchDashboardRef.current();
           }
         )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "goals",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchDashboardRef.current();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "labels",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchDashboardRef.current();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "transaction_labels",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchDashboardRef.current();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "recurring_transactions",
+            filter: `user_id=eq.${user.id}`,
+          },
+          () => {
+            fetchDashboardRef.current();
+          }
+        )
         .subscribe();
     };
 
@@ -245,6 +297,11 @@ export default function HomeScreen({ navigation, route }) {
       { data: accountRows },
       budgetsResult,
       categoriesResult,
+      goalsResult,
+      loansResult,
+      labelsResult,
+      recurringResult,
+      transactionLabelsResult,
     ] = await Promise.all([
       supabase.from("profiles").select("name").eq("id", user.id).single(),
       supabase.from("accounts").select("id,name,balance").eq("user_id", user.id),
@@ -285,6 +342,39 @@ export default function HomeScreen({ navigation, route }) {
         .eq("user_id", user.id)
         .order("created_at", { ascending: false }),
       supabase.from("categories").select("id,name,icon,color,type").eq("user_id", user.id),
+      supabase
+        .from("goals")
+        .select("id,title,target_amount,current_amount,start_date,end_date,color")
+        .eq("user_id", user.id)
+        .order("end_date", { ascending: true }),
+      supabase
+        .from("loans")
+        .select("id,name,amount,type,start_date,end_date,status")
+        .eq("user_id", user.id)
+        .order("end_date", { ascending: true }),
+      supabase
+        .from("labels")
+        .select("id,name,color")
+        .eq("user_id", user.id)
+        .order("name", { ascending: true }),
+      supabase
+        .from("recurring_transactions")
+        .select("id,title,amount,type,period,next_run,account_id,category_id,accounts(name),categories(name)")
+        .eq("user_id", user.id)
+        .order("next_run", { ascending: true }),
+      supabase
+        .from("transaction_labels")
+        .select(
+          `
+          label_id,
+          transactions (
+            id,
+            amount,
+            type
+          )
+        `
+        )
+        .eq("user_id", user.id),
     ]);
 
     if (profile) setUsername(profile.name);
@@ -301,6 +391,11 @@ export default function HomeScreen({ navigation, route }) {
     const allTransactions = (tx || []).sort(compareTransactionsByDateTimeDesc);
     const categories = categoriesResult.data || [];
     const budgets = budgetsResult.data || [];
+    const goalRows = goalsResult.data || [];
+    const loanRows = loansResult.data || [];
+    const labelRows = labelsResult.data || [];
+    const recurringRows = recurringResult.data || [];
+    const transactionLabelRows = transactionLabelsResult.data || [];
 
     setTransactions(
       allTransactions
@@ -309,6 +404,36 @@ export default function HomeScreen({ navigation, route }) {
           account: accountMap[transaction.account_id] || null,
         }))
     );
+    setGoals(goalRows);
+    setLoans(loanRows);
+    setRecurringTransactions(recurringRows);
+
+    const labelSummaryMap = new Map(
+      labelRows.map((label) => [
+        label.id,
+        {
+          ...label,
+          totalTransactions: 0,
+          totalAmount: 0,
+        },
+      ])
+    );
+
+    transactionLabelRows.forEach((row) => {
+      const summary = labelSummaryMap.get(row.label_id);
+      const linkedTransaction = Array.isArray(row.transactions)
+        ? row.transactions[0]
+        : row.transactions;
+
+      if (!summary || !linkedTransaction) {
+        return;
+      }
+
+      summary.totalTransactions += 1;
+      summary.totalAmount += Math.abs(Number(linkedTransaction.amount || 0));
+    });
+
+    setLabelSummaries([...labelSummaryMap.values()]);
 
     const latestTransactionDate = allTransactions.length
       ? parseStoredDate(allTransactions[0].date)
@@ -667,22 +792,22 @@ export default function HomeScreen({ navigation, route }) {
             icon="pie-chart"
             title="Loans"
             navigation={navigation}
-            bodyIcon="archive"
-            bodyText="No loans"
+            variant="loans"
+            loans={loans}
           />
           <SectionCard
             icon="flag"
             title="Goals"
             navigation={navigation}
-            bodyIcon="flag"
-            bodyText="No goals set"
+            variant="goals"
+            goals={goals}
           />
           <SectionCard
             icon="tag"
             title="Labels"
             navigation={navigation}
-            bodyIcon="tag"
-            bodyText="No labels"
+            variant="labels"
+            labels={labelSummaries}
           />
           <SectionCard
             icon="activity"
@@ -695,8 +820,8 @@ export default function HomeScreen({ navigation, route }) {
             icon="repeat"
             title="Recurring"
             navigation={navigation}
-            bodyIcon="calendar"
-            bodyText="No recurring events"
+            variant="recurring"
+            recurringTransactions={recurringTransactions}
           />
           <SectionCard
             icon="grid"
@@ -755,6 +880,12 @@ export default function HomeScreen({ navigation, route }) {
               categoryColor={t.categories?.color || "#a05c3b"}
               categoryIcon={t.categories?.icon || "credit-card"}
               showDivider={index !== transactions.length - 1}
+              onPress={() =>
+                navigation.navigate("UpdateTransaction", {
+                  transaction: t,
+                  returnTab: "Home",
+                })
+              }
             />
           ))}
         </View>
@@ -793,6 +924,10 @@ function SectionCard({
   compactTitle,
   icon,
   navigation,
+  goals,
+  labels,
+  loans,
+  recurringTransactions,
   topCategories,
   title,
   variant,
@@ -802,13 +937,15 @@ function SectionCard({
   const renderBody = () => {
     if (variant === "budget") {
       const trackedBudgets = budgetInsights || [];
-      const strongestBudget = [...trackedBudgets].sort((left, right) => right.progress - left.progress)[0];
+      const totalBudget = trackedBudgets.reduce((sum, budget) => sum + Number(budget.amount || 0), 0);
+      const totalSpent = trackedBudgets.reduce((sum, budget) => sum + Number(budget.liveSpent || 0), 0);
+      const spendPercent = totalBudget > 0 ? Math.min(totalSpent / totalBudget, 1) : 0;
 
       if (!trackedBudgets.length) {
         return (
           <View style={styles.sectionBody}>
             <Feather name={bodyIcon || "bar-chart-2"} size={46} color="#cbb8b1" />
-            <Text style={styles.sectionBodyText}>No budgets set</Text>
+            <Text style={styles.sectionBodyText}>No data</Text>
           </View>
         );
       }
@@ -818,9 +955,7 @@ function SectionCard({
           <Text style={styles.sectionSmallLabel}>Active budgets</Text>
           <Text style={styles.sectionAmount}>{trackedBudgets.length}</Text>
           <Text style={styles.sectionTrendNeutral}>
-            {strongestBudget
-              ? `${strongestBudget.name || "Budget"} is at ${Math.round((strongestBudget.progress || 0) * 100)}%`
-              : "Track how your limits are moving"}
+            {`${Math.round(spendPercent * 100)}% of total budget spent`}
           </Text>
         </View>
       );
@@ -832,6 +967,145 @@ function SectionCard({
           <Text style={styles.sectionSmallLabel}>This month spending</Text>
           <Text style={styles.sectionAmount}>₹{Number(amount || 0).toFixed(2)}</Text>
           <Text style={styles.sectionTrend}>-100.0% vs last month</Text>
+        </View>
+      );
+    }
+
+    if (variant === "goals") {
+      const trackedGoals = goals || [];
+      const activeGoals = trackedGoals.filter(
+        (goal) => Number(goal.current_amount || 0) < Number(goal.target_amount || 0)
+      );
+      const completedGoals = trackedGoals.length - activeGoals.length;
+      const totalTarget = activeGoals.reduce((sum, goal) => sum + Number(goal.target_amount || 0), 0);
+      const totalCurrent = activeGoals.reduce((sum, goal) => sum + Number(goal.current_amount || 0), 0);
+
+      if (!trackedGoals.length) {
+        return (
+          <View style={styles.sectionBody}>
+            <Feather name="flag" size={46} color="#cbb8b1" />
+            <Text style={styles.sectionBodyText}>No data</Text>
+          </View>
+        );
+      }
+
+      return (
+        <View style={styles.sectionListBody}>
+          <View style={styles.sectionAnalyticsBody}>
+            <Text style={styles.sectionSmallLabel}>Goals</Text>
+            <Text style={styles.sectionAmount}>{activeGoals.length}</Text>
+            <Text style={styles.sectionTrendNeutral}>
+              {`${completedGoals} Completed`}
+            </Text>
+            <Text style={styles.sectionTrendNeutral}>
+              {`Progress: ₹${totalCurrent.toFixed(2)} / ₹${totalTarget.toFixed(2)}`}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
+    if (variant === "loans") {
+      const trackedLoans = loans || [];
+      const activeLoans = trackedLoans.filter((loan) => loan.status !== "settled");
+      const lendingLoans = activeLoans.filter((loan) => (loan.type || "lending") === "lending");
+      const borrowingLoans = activeLoans.filter((loan) => (loan.type || "lending") === "borrowing");
+      const loanBalance = activeLoans.reduce((sum, loan) => sum + Number(loan.amount || 0), 0);
+
+      if (!activeLoans.length) {
+        return (
+          <View style={styles.sectionBody}>
+            <Feather name="archive" size={46} color="#cbb8b1" />
+            <Text style={styles.sectionBodyText}>No data</Text>
+          </View>
+        );
+      }
+
+      return (
+        <View style={styles.sectionListBody}>
+          <View style={styles.sectionAnalyticsBody}>
+            <Text style={styles.sectionSmallLabel}>Loans</Text>
+            <Text style={styles.sectionAmount}>{activeLoans.length}</Text>
+            <Text style={styles.sectionTrendNeutral}>
+              {`${lendingLoans.length} Lending`}
+            </Text>
+            <Text style={styles.sectionTrendNeutral}>
+              {`${borrowingLoans.length} Borrowing`}
+            </Text>
+            <Text style={styles.sectionTrendNeutral}>
+              {`Loan Balance ₹${loanBalance.toFixed(2)}`}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
+    if (variant === "labels") {
+      const trackedLabels = labels || [];
+      const topLabels = [...trackedLabels]
+        .sort((left, right) => right.totalTransactions - left.totalTransactions)
+        .slice(0, 2);
+      const topLabel = topLabels[0] || null;
+
+      if (!trackedLabels.length) {
+        return (
+          <View style={styles.sectionBody}>
+            <Feather name="tag" size={46} color="#cbb8b1" />
+            <Text style={styles.sectionBodyText}>No data</Text>
+          </View>
+        );
+      }
+
+      return (
+        <View style={styles.sectionListBody}>
+          <View style={styles.sectionAnalyticsBody}>
+            <Text style={styles.sectionSmallLabel}>Labels</Text>
+            <Text style={styles.sectionAmount}>{trackedLabels.length}</Text>
+            <Text style={styles.sectionTrendNeutral}>
+              {topLabel ? `Top: ${topLabel.name || "Label"}` : "No data"}
+            </Text>
+            <Text style={styles.sectionTrendNeutral}>
+              {topLabel
+                ? `Spend with ${topLabel.name || "Label"}: ₹${Number(topLabel.totalAmount || 0).toFixed(2)}`
+                : "No data"}
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
+    if (variant === "recurring") {
+      const trackedRecurring = recurringTransactions || [];
+      const activeRecurringCount = trackedRecurring.length;
+      const monthlyRecurringTotal = trackedRecurring.reduce(
+        (sum, item) => sum + Number(item.amount || 0),
+        0
+      );
+
+      if (!trackedRecurring.length) {
+        return (
+          <View style={styles.sectionBody}>
+            <Feather name="calendar" size={46} color="#cbb8b1" />
+            <Text style={styles.sectionBodyText}>No data</Text>
+          </View>
+        );
+      }
+
+      return (
+        <View style={styles.sectionListBody}>
+          <View style={styles.sectionAnalyticsBody}>
+            <Text style={styles.sectionSmallLabel}>Recurring</Text>
+            <Text style={styles.sectionAmount}>{activeRecurringCount}</Text>
+            <Text style={styles.sectionTrendNeutral}>
+              Active
+            </Text>
+            <Text style={styles.sectionTrendNeutral}>
+              {`₹${monthlyRecurringTotal.toFixed(2)}`}
+            </Text>
+            <Text style={styles.sectionTrendNeutral}>
+              Monthly Payment
+            </Text>
+          </View>
         </View>
       );
     }
@@ -929,8 +1203,8 @@ function SectionCard({
 
     return (
       <View style={styles.sectionBody}>
-        <Feather name={bodyIcon} size={46} color="#cbb8b1" />
-        <Text style={styles.sectionBodyText}>{bodyText}</Text>
+        <Feather name="grid" size={46} color="#cbb8b1" />
+        <Text style={styles.sectionBodyText}>No data available</Text>
       </View>
     );
   };
@@ -1151,6 +1425,13 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
   },
 
+  sectionListBody: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 10,
+  },
+
   sectionBodyText: {
     color: "#d8c8c0",
     fontSize: 13,
@@ -1191,6 +1472,63 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginTop: 8,
     lineHeight: 16,
+  },
+
+  summaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 8,
+  },
+
+  summaryRowHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 8,
+  },
+
+  summaryDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginRight: 8,
+  },
+
+  summaryPill: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    marginRight: 8,
+  },
+
+  summaryPillLending: {
+    backgroundColor: "#d6c86d",
+  },
+
+  summaryPillBorrowing: {
+    backgroundColor: "#e58b67",
+  },
+
+  summaryPillIncome: {
+    backgroundColor: "#79ff8a",
+  },
+
+  summaryPillExpense: {
+    backgroundColor: "#ff7676",
+  },
+
+  summaryRowTitle: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: "700",
+    flex: 1,
+  },
+
+  summaryRowMeta: {
+    color: "#d8c8c0",
+    fontSize: 11,
+    fontWeight: "700",
   },
 
   weeklyCardBody: {

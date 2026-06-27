@@ -64,6 +64,17 @@ function getEndOfYear(value) {
   return new Date(date.getFullYear(), 11, 31, 23, 59, 59, 999);
 }
 
+function getStartOfQuarter(value) {
+  const date = parseStoredDate(value);
+  const quarterStartMonth = Math.floor(date.getMonth() / 3) * 3;
+  return new Date(date.getFullYear(), quarterStartMonth, 1);
+}
+
+function getEndOfQuarter(value) {
+  const start = getStartOfQuarter(value);
+  return new Date(start.getFullYear(), start.getMonth() + 3, 0, 23, 59, 59, 999);
+}
+
 export function getBudgetPeriodRange(period, referenceDate = new Date()) {
   if (period === "daily") {
     return { start: getStartOfDay(referenceDate), end: getEndOfDay(referenceDate) };
@@ -75,6 +86,10 @@ export function getBudgetPeriodRange(period, referenceDate = new Date()) {
 
   if (period === "yearly") {
     return { start: getStartOfYear(referenceDate), end: getEndOfYear(referenceDate) };
+  }
+
+  if (period === "quarterly") {
+    return { start: getStartOfQuarter(referenceDate), end: getEndOfQuarter(referenceDate) };
   }
 
   return { start: getStartOfMonth(referenceDate), end: getEndOfMonth(referenceDate) };
@@ -110,6 +125,7 @@ function getTonePriority(tone) {
 function getBudgetWindowLabel(period) {
   if (period === "daily") return "today";
   if (period === "weekly") return "this week";
+  if (period === "quarterly") return "this quarter";
   if (period === "yearly") return "this year";
   return "this month";
 }
@@ -117,6 +133,7 @@ function getBudgetWindowLabel(period) {
 function getBudgetPeriodTitle(period) {
   if (period === "daily") return "Daily";
   if (period === "weekly") return "Weekly";
+  if (period === "quarterly") return "Quarterly";
   if (period === "yearly") return "Yearly";
   return "Monthly";
 }

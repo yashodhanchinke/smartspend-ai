@@ -8,7 +8,7 @@ export default function ScreenHeader({
   title,
   notificationCount = 0,
   onNotificationPress,
-  showNotification = true,
+  showNotification = false,
 }) {
   const navigation = useNavigation();
 

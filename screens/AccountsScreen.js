@@ -343,6 +343,12 @@ export default function AccountsScreen({ navigation, route }) {
                   categoryColor={transaction.categories?.color || "#5a4138"}
                   categoryIcon={transaction.categories?.icon || "bank-transfer"}
                   showDivider={index !== transactions.length - 1}
+                  onPress={() =>
+                    navigation.navigate("UpdateTransaction", {
+                      transaction,
+                      returnTab: "Accounts",
+                    })
+                  }
                 />
               );
             })

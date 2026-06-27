@@ -47,14 +47,6 @@ function parseSmsTimestamp(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function isSameLocalDate(a, b) {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
-
 function isSmsRecent(value, maxDays = 7) {
   const parsed = parseSmsTimestamp(value);
   if (!parsed) {

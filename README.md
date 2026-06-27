@@ -165,8 +165,11 @@ Terminal 3 (app):
 ```bash
 cd ~/smartspend-ai
 bash scripts/set-expo-api-url.sh https://YOUR_NGROK_URL
-npm run start:devclient
+npm run start:devclient or npm run android
+
 ```
+if u want to check the device that connected
+adb devices
 
 Notes:
 - Keep backend + tunnel terminals open.

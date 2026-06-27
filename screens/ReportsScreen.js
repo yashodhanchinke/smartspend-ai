@@ -1,7 +1,7 @@
 import DateTimePicker from "@react-native-community/datetimepicker";
 import Feather from "@expo/vector-icons/Feather";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Constants from "expo-constants";
 import * as WebBrowser from "expo-web-browser";
@@ -417,6 +417,8 @@ function buildCategoryBreakdown(transactions, type) {
       if (!bucket[key]) {
         bucket[key] = {
           key,
+          categoryId: transaction.category_id || null,
+          category: transaction.categories || null,
           name: transaction.categories?.name || (type === "income" ? "Income" : "Others"),
           icon: transaction.categories?.icon || "tag",
           color: transaction.categories?.color || (type === "income" ? "#eb727b" : "#6db2ec"),
@@ -1051,6 +1053,7 @@ function FilterSheet({
 }
 
 export default function ReportsScreen() {
+  const navigation = useNavigation();
   const currentYear = new Date().getFullYear();
   const currentBounds = getYearBounds(currentYear);
 
@@ -1114,19 +1117,49 @@ export default function ReportsScreen() {
     []
   );
 
+  const parseBackendJson = useCallback(async ({ response, base, path }) => {
+    const contentType = response?.headers?.get?.("content-type") || "";
+    const rawText = await response.text().catch(() => "");
+    const trimmed = String(rawText || "").trim();
+
+    if (!trimmed) return null;
+
+    if (contentType.includes("text/html") || trimmed.startsWith("<")) {
+      const preview = trimmed.slice(0, 140).replace(/\s+/g, " ");
+      throw new Error(
+        `Backend returned HTML (status ${response.status}) from ${base}${path}. Check EXPO_PUBLIC_API_URL points to your backend and the backend is running. Preview: ${preview}`
+      );
+    }
+
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      const preview = trimmed.slice(0, 140).replace(/\s+/g, " ");
+      throw new Error(
+        `Backend returned non-JSON (status ${response.status}) from ${base}${path}. Preview: ${preview}`
+      );
+    }
+  }, []);
+
   const fetchReports = useCallback(async (userId) => {
     if (!userId) return [];
     try {
-      const { response } = await callBackendApi(`/api/reports?limit=50`, {
+      const path = `/api/reports?limit=50`;
+      const { response, base } = await callBackendApi(path, {
         method: "GET",
         headers: {
           "Authorization": `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
         }
       });
-      const rawText = await response.text();
-      const json = rawText ? JSON.parse(rawText) : null;
+      const json = await parseBackendJson({ response, base, path });
 
-      if (!response.ok || !json?.success) return [];
+      if (!response.ok) {
+        throw new Error(json?.error || `Backend error (${response.status}) while loading reports.`);
+      }
+
+      if (!json?.success) {
+        throw new Error(json?.error || "Backend did not return success while loading reports.");
+      }
 
       return (json?.reports || []).map((item) => ({
         id: item.id,
@@ -1195,7 +1228,8 @@ export default function ReportsScreen() {
               const { data: { session } } = await supabase.auth.getSession();
               if (!session?.access_token) throw new Error("You must be logged in.");
 
-              const { response: resp } = await callBackendApi("/api/email-report", {
+              const path = "/api/email-report";
+              const { response: resp, base } = await callBackendApi(path, {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
@@ -1208,10 +1242,9 @@ export default function ReportsScreen() {
                 }),
               });
 
-              const raw = await resp.text();
-              const json = raw ? JSON.parse(raw) : null;
+              const json = await parseBackendJson({ response: resp, base, path });
               if (!resp.ok || !json?.success) {
-                throw new Error(json?.details || json?.error || "Failed to send email.");
+                throw new Error(json?.details || json?.error || `Failed to send email (${resp.status}).`);
               }
 
               Alert.alert("Sent", `Report emailed to ${emailTo}`);
@@ -1263,7 +1296,8 @@ export default function ReportsScreen() {
         throw new Error("You must be logged in to request a report.");
       }
 
-      const { response, base: API_URL } = await callBackendApi("/api/monthly-report", {
+      const path = "/api/monthly-report";
+      const { response, base: API_URL } = await callBackendApi(path, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1276,19 +1310,12 @@ export default function ReportsScreen() {
         }),
       });
 
-      const rawText = await response.text();
-      let json = null;
-      try {
-        json = rawText ? JSON.parse(rawText) : null;
-      } catch (_parseError) {
-        json = null;
-      }
+      const json = await parseBackendJson({ response, base: API_URL, path });
 
       if (!response.ok || !json?.success) {
         const message =
           json?.details ||
           json?.error ||
-          (rawText && rawText.trim().length ? rawText : null) ||
           `Request failed (${response.status}).`;
         throw new Error(message);
       }
@@ -1341,7 +1368,8 @@ export default function ReportsScreen() {
                         throw new Error("You must be logged in.");
                       }
 
-                      const { response: resp } = await callBackendApi("/api/email-report", {
+                      const path = "/api/email-report";
+                      const { response: resp, base } = await callBackendApi(path, {
                         method: "POST",
                         headers: {
                           "Content-Type": "application/json",
@@ -1350,10 +1378,9 @@ export default function ReportsScreen() {
                         body: JSON.stringify({ report_id: reportId, filename, email_to: emailTo }),
                       });
 
-                      const t = await resp.text();
-                      const j = t ? JSON.parse(t) : null;
+                      const j = await parseBackendJson({ response: resp, base, path });
                       if (!resp.ok || !j?.success) {
-                        throw new Error(j?.details || j?.error || "Failed to send email.");
+                        throw new Error(j?.details || j?.error || `Failed to send email (${resp.status}).`);
                       }
 
                       Alert.alert("Sent", `Report emailed to ${emailTo}`);
@@ -1643,6 +1670,16 @@ export default function ReportsScreen() {
   const chartTicks = getChartTicks(maxChartValue);
   const chartSlotWidth = appliedRange === "daily" ? 74 : appliedRange === "monthly" ? 26 : appliedRange === "yearly" ? 38 : 42;
   const chartWidth = Math.max(CARD_WIDTH - 36, groupedSeries.length * chartSlotWidth);
+  const openCategoryDetails = useCallback(
+    (item) => {
+      if (!item?.categoryId || !item?.category) {
+        return;
+      }
+
+      navigation.navigate("CategoryDetails", { category: item.category });
+    },
+    [navigation]
+  );
 
   const openFilters = () => {
     setDraftRange(appliedRange);
@@ -1844,7 +1881,12 @@ export default function ReportsScreen() {
           <DonutChart items={chartBreakdownItems} total={selectedTypeTotal} selectedType={selectedType} />
 
           {chartBreakdownItems.map((item) => (
-            <View key={`${item.key}-card`} style={styles.breakdownRow}>
+            <Pressable
+              key={`${item.key}-card`}
+              style={styles.breakdownRow}
+              onPress={() => openCategoryDetails(item)}
+              disabled={!item.categoryId || !item.category}
+            >
               <View style={styles.breakdownLeft}>
                 <View style={[styles.breakdownIcon, { backgroundColor: `${item.color}22` }]}>
                   <MaterialCommunityIcons name={item.icon} size={18} color={item.color} />
@@ -1860,7 +1902,7 @@ export default function ReportsScreen() {
                 <Text style={styles.breakdownValue}>{formatCurrency(item.total)}</Text>
                 <Feather name="chevron-right" size={18} color="#92766d" />
               </View>
-            </View>
+            </Pressable>
           ))}
         </View>
 

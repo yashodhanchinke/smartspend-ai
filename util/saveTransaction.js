@@ -73,6 +73,32 @@ async function persistBalances(balanceMap) {
   }
 }
 
+async function persistTransactionLabels({ transactionId, userId, labelIds = [] }) {
+  const uniqueLabelIds = [...new Set((labelIds || []).filter(Boolean))];
+
+  await supabase
+    .from("transaction_labels")
+    .delete()
+    .eq("transaction_id", transactionId)
+    .eq("user_id", userId);
+
+  if (!uniqueLabelIds.length) {
+    return;
+  }
+
+  const { error } = await supabase.from("transaction_labels").insert(
+    uniqueLabelIds.map((labelId) => ({
+      transaction_id: transactionId,
+      label_id: labelId,
+      user_id: userId,
+    }))
+  );
+
+  if (error) {
+    throw error;
+  }
+}
+
 export async function saveTransaction({
   userId,
   type,
@@ -83,7 +109,10 @@ export async function saveTransaction({
   time,
   accountId,
   categoryId = null,
+  goalId = null,
+  loanId = null,
   toAccountId = null,
+  labelIds = [],
 }) {
   const parsedAmount = normalizeAmount(amount);
 
@@ -106,6 +135,8 @@ export async function saveTransaction({
         account_id: accountId,
         to_account_id: type === "transfer" ? toAccountId : null,
         category_id: type === "transfer" ? null : categoryId,
+        goal_id: type === "transfer" ? null : goalId,
+        loan_id: type === "transfer" ? null : loanId,
         type,
         title: title?.trim() || "",
         amount: parsedAmount,
@@ -119,6 +150,14 @@ export async function saveTransaction({
 
   if (error) {
     throw error;
+  }
+
+  if (type !== "transfer") {
+    await persistTransactionLabels({
+      transactionId: insertedTransaction.id,
+      userId,
+      labelIds,
+    });
   }
 
   if (type === "transfer") {
@@ -149,7 +188,10 @@ export async function updateTransaction({
   time,
   accountId,
   categoryId = null,
+  goalId = null,
+  loanId = null,
   toAccountId = null,
+  labelIds = [],
 }) {
   const parsedAmount = normalizeAmount(amount);
 
@@ -186,6 +228,8 @@ export async function updateTransaction({
     account_id: accountId,
     to_account_id: type === "transfer" ? toAccountId : null,
     category_id: type === "transfer" ? null : categoryId,
+    goal_id: type === "transfer" ? null : goalId,
+    loan_id: type === "transfer" ? null : loanId,
     type,
     title: title?.trim() || "",
     amount: parsedAmount,
@@ -216,6 +260,14 @@ export async function updateTransaction({
 
   if (updateError) {
     throw updateError;
+  }
+
+  if (type !== "transfer") {
+    await persistTransactionLabels({
+      transactionId,
+      userId,
+      labelIds,
+    });
   }
 
   await persistBalances(balanceMap);

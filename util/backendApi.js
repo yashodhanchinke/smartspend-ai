@@ -29,6 +29,47 @@ export function getApiBaseCandidates() {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
+async function readResponseText(response, { maxChars = 2000 } = {}) {
+  try {
+    const text = await response.text();
+    if (!text) return "";
+    return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+  } catch {
+    return "";
+  }
+}
+
+export async function parseJsonResponse({ response, base, path } = {}) {
+  const contentType = response?.headers?.get?.("content-type") || "";
+  const rawText = await readResponseText(response);
+  const trimmed = rawText.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  // Detect common misconfiguration: backend URL returns HTML (ngrok landing page, 404 HTML, etc.)
+  if (contentType.includes("text/html") || trimmed.startsWith("<")) {
+    const status = response?.status;
+    const urlHint = base && path ? `${base}${path}` : base || "backend URL";
+    const preview = trimmed.slice(0, 140).replace(/\s+/g, " ");
+    throw new Error(
+      `Backend returned HTML (status ${status}) from ${urlHint}. Check EXPO_PUBLIC_API_URL points to your backend (not an HTML page) and that the backend server is running. Preview: ${preview}`
+    );
+  }
+
+  try {
+    return JSON.parse(trimmed);
+  } catch (error) {
+    const status = response?.status;
+    const urlHint = base && path ? `${base}${path}` : base || "backend URL";
+    const preview = trimmed.slice(0, 140).replace(/\s+/g, " ");
+    throw new Error(
+      `Backend returned non-JSON (status ${status}) from ${urlHint}. Preview: ${preview}`
+    );
+  }
+}
+
 async function fetchWithTimeout(url, init, timeoutMs = 10000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);

@@ -1,0 +1,1185 @@
+1. Project Title
+SmartSpend AI
+
+
+2. Project Overview
+
+What the project is
+- SmartSpend AI is a React Native (Expo) mobile app for personal finance tracking, backed by a small Node.js/Express service and a Supabase (Postgres) database.
+- The app helps users record transactions (income/expense/transfer), manage accounts, budgets, goals, loans, recurring items, and view analytics and reports.
+- It adds “AI features” in two places:
+  - Supabase Edge Functions (Deno) for receipt OCR + SMS category classification + short analytics summary generation using Google Gemini.
+  - A Node.js backend that generates a monthly/period report PDF and sends emails, plus a notification generator that can rewrite nudge messages via Gemini.
+
+Main purpose of the project
+- Provide a single mobile-first place to track money and get useful summaries:
+  - Daily/weekly transaction review (Home).
+  - Budget progress and nudges.
+  - AI-assisted receipt scanning and SMS import (Android) to reduce manual entry.
+  - PDF reports (stored in Supabase Storage and optionally emailed).
+
+Problem it solves
+- Manual expense tracking is slow and easy to skip.
+- Users often forget patterns (overspending, due loans, recurring payments).
+- Reports and summaries are hard to create manually.
+- This project tries to make data capture easier (receipt scan + SMS import) and make the data “actionable” (budgets, reminders, AI nudges, reports).
+
+Target users
+- Individuals who want a lightweight personal finance tracker (especially tuned for Indian context: rupee symbol ₹, “Hinglish” notifications, bank SMS patterns).
+- Android users benefit most from SMS auto-import (requires SMS permissions + a dev-client build, not Expo Go).
+
+
+3. Project Objectives
+- Provide secure user authentication and per-user data isolation using Supabase Auth + Row Level Security (RLS).
+- Let users create and manage:
+  - Accounts (cash/bank/etc.) with live balances.
+  - Categories (seeded automatically for new users).
+  - Transactions (income/expense/transfer) with correct balance impact.
+  - Budgets (category/overall, period-based) with progress tracking.
+  - Goals (target vs current) and progress tracking.
+  - Loans (borrowing/lending) with due reminders and settlement flow.
+  - Recurring transactions with due reminders.
+- Provide insights and automation:
+  - AI-based receipt scan → auto-create transaction.
+  - SMS sync/import (Android) → auto-create transactions.
+  - Notification system (nudges) based on budgets/goals/loans/trends.
+  - PDF report generation + storage + email sending.
+
+
+4. Features of the Project (Detailed)
+
+4.1 Authentication (Login/Register)
+- Files:
+  - screens/LoginScreen.js
+  - screens/RegisterScreen.js
+  - lib/supabase.js
+- How it works:
+  - Users sign up and sign in using Supabase Auth.
+  - On successful register, the app inserts a row into public.profiles (id, name, email) keyed by the auth user id.
+  - AppNavigator (navigation/AppNavigator.js) listens to Supabase auth state changes to switch between:
+    - Login/Register stack (when no session)
+    - The main app (BottomTabs) and feature screens (when session exists)
+
+4.2 Accounts + Live Balance Updates
+- Files:
+  - screens/AccountsScreen.js
+  - screens/AddAccountScreen.js
+  - util/saveTransaction.js
+  - supabase/schema_reference.sql (public.accounts)
+- How it works:
+  - Accounts are stored in public.accounts and include balance, type, color, icon, and is_default.
+  - When a transaction is saved or updated, util/saveTransaction.js:
+    - Inserts/updates public.transactions
+    - Reads affected account balances
+    - Applies balance impact:
+      - expense: subtract from account
+      - income: add to account
+      - transfer: subtract from from-account and add to to-account
+    - Writes updated balances back to public.accounts
+
+4.3 Categories (Seeded Defaults + Custom Categories)
+- Files:
+  - data/categories.js
+  - util/seedCategories.js
+  - screens/CategoriesScreen.js
+  - screens/AddCategoryScreen.js
+  - supabase/schema_reference.sql (public.categories)
+- How it works:
+  - When a user logs in, AppNavigator runs seedCategoriesForUser(userId).
+  - If the user has zero categories, the app inserts default expense + income categories for that user.
+  - Users can add/update categories via AddCategoryScreen.
+
+4.4 Transactions (Manual + Transfer Support)
+- Files:
+  - screens/TransactionsScreen.js
+  - screens/AddTransactionScreen.js
+  - util/saveTransaction.js
+  - util/transactionEntry.js (entry choice modal)
+  - supabase/schema_reference.sql (public.transactions)
+- Key behavior:
+  - Transaction types: "income", "expense", "transfer".
+  - Transfers use transactions.to_account_id and do not use category_id.
+  - The app uses Supabase realtime (postgres_changes) in multiple screens (Home, Notifications provider, etc.) to refresh UI after inserts/updates.
+
+4.5 Budgets (Category/Overall + Multi-category support)
+- Files:
+  - screens/BudgetsScreen.js
+  - screens/AddBudgetScreen.js
+  - util/budgetInsights.js
+  - supabase/schema_reference.sql (public.budgets, public.budget_categories)
+  - supabase/migrations/20260321_add_budget_categories_and_metadata.sql
+- How it works:
+  - Budgets can be:
+    - budget_type = "category" (linked to a category_id and/or multiple categories via budget_categories)
+    - budget_type = "overall" (spend across all expense transactions)
+  - budget period is stored in budgets.period (daily/weekly/monthly/yearly).
+  - util/budgetInsights.js calculates a liveSpent value by scanning transactions within the current period and comparing against budget.amount.
+  - HomeScreen shows budget insights and uses tones (positive/attention/warning/critical) when progress crosses thresholds.
+
+4.6 Goals (Saving Targets)
+- Files:
+  - screens/GoalsScreen.js
+  - screens/AddGoalScreen.js
+  - supabase/schema_reference.sql (public.goals)
+- How it works:
+  - Goals store target_amount and current_amount, and optional start/end dates.
+  - Notification logic can flag “goal lagging” or “past due” based on expected vs actual progress (backend/notifications.js).
+
+4.7 Loans (Borrowing/Lending) + Settlement
+- Files:
+  - screens/LoansScreen.js
+  - screens/AddLoanScreen.js
+  - components/LoanSettlementModal.js
+  - util/loanSettlement.js
+  - supabase/schema_reference.sql (public.loans)
+  - supabase/migrations/20260330_add_loan_settlement_fields.sql
+- How it works:
+  - Loans have type = borrowing/lending, amount, start/end dates.
+  - When a loan is due (end_date <= today) and pending, HomeScreen can prompt settlement.
+  - util/loanSettlement.js settles a loan by:
+    - Creating a transaction (expense for borrowing repayment, income for receiving lent money back)
+    - Updating loans.status = "settled" + settlement_transaction_id + settlement_account_id
+
+4.8 Recurring Transactions
+- Files:
+  - screens/RecurringScreen.js
+  - screens/AddRecurringScreen.js
+  - supabase/schema_reference.sql (public.recurring_transactions)
+- How it works:
+  - Recurring items have next_run.
+  - Notification generator can produce nudges when next_run is due.
+
+4.9 Receipt Scan (AI OCR → Auto Transaction)
+- Files:
+  - screens/ReceiptScanScreen.js
+  - supabase/functions/scan-receipt-ocr/index.ts
+  - supabase/schema_reference.sql (public.receipts)
+- How it works (step-by-step):
+  1) User picks an account.
+  2) User selects an image from gallery or camera via expo-image-picker.
+  3) The app calls Supabase Edge Function scan-receipt-ocr with:
+     - userId
+     - imageBase64 + mimeType
+     - list of category names/types (so AI can suggest existing categories)
+  4) The Edge Function calls Gemini (model: gemini-2.5-flash) and returns parsed JSON:
+     - merchant, title, amount, date, type, suggestedCategoryName, rawText
+  5) The app uses util/saveTransaction.js to insert the transaction and update account balance.
+  6) The app inserts a receipt record into public.receipts linking to the created transaction.
+
+4.10 SMS Import + AI Assistance (Android-only, Dev Client)
+- Files:
+  - util/smsNative.js
+  - util/smsSync.js
+  - util/smsParser.js
+  - util/bankSmsRules.js
+  - supabase/functions/classify-sms-transaction/index.ts
+  - backend/server.js endpoint /api/sms/analyze
+  - app.json (Android permissions: READ_SMS, RECEIVE_SMS)
+- How it works:
+  - The SMS module is only used on Android and only when running a dev-client build (it is disabled in Expo Go).
+  - smsSync.js reads SMS inbox and filters for recent bank-like messages.
+  - It attempts to parse amount/type/merchant from SMS text (smsParser.js) and matches bank rules (bankSmsRules.js).
+  - For “Others/Other” category or uncertain category, the app can call:
+    - Supabase Edge Function classify-sms-transaction (Gemini) to pick one of the user’s existing category names, with a confidence score.
+  - For incoming SMS events:
+    - If local bank rule matching fails but the SMS still looks like a transaction, it calls backend /api/sms/analyze (Gemini) to detect bank name and whether it is a transaction.
+  - If the SMS passes filters, the app saves a transaction and logs the raw SMS in public.sms_transactions for deduplication.
+
+4.11 Notifications / Nudges (AI + Rules + Realtime)
+- Files:
+  - context/NotificationContext.js (mobile provider)
+  - backend/notifications.js (server-side generator)
+  - supabase/schema_reference.sql (public.notifications, public.notification_preferences)
+  - supabase/migrations/20260423_add_notifications_system.sql
+- How it works:
+  - Mobile:
+    - On app start and on relevant realtime events, NotificationContext calls backend /api/notifications/generate.
+    - It also registers push permission status and (optionally) Expo push token via /api/notifications/register-device.
+    - Notifications are stored in public.notifications with RLS so each user can only see their own.
+  - Backend:
+    - backend/notifications.js loads budgets/loans/goals/recurring/transactions/accounts and creates “candidates” such as:
+      - Budget near full / crossed
+      - Loan due
+      - Goal lagging or past due
+      - Recurring item due
+      - Weekly spending trend spike
+      - Top category overspend
+      - Food delivery / shopping “unnecessary spend” hints
+      - Low balance pace warning
+      - A positive “keep it up” message for good control
+    - If GEMINI_API_KEY is configured, Gemini rewrites candidates into short user-friendly title/body (Hinglish mode supported).
+    - It deduplicates using notifications.fingerprint (unique per user).
+    - Read notifications are kept visible only until expires_at (app sets a 3-day expiry when marking read).
+
+4.12 Reports (PDF Generation + Storage + Email)
+- Files:
+  - screens/ReportsScreen.js (mobile UI + calling backend)
+  - backend/server.js (API endpoints)
+  - backend/generateMonthlyReport.js (PDF generator + storage upload + email)
+  - backend/reportScheduler.js (automatic month-end scheduler)
+  - supabase/schema_reference.sql (public.user_reports + storage bucket reports)
+  - supabase/sql/create_user_reports.sql
+- How it works:
+  - The backend generates a report for a date range:
+    - By month (YYYY-MM)
+    - Last N days
+    - Custom start/end date
+    - Optional filters: account_ids, category_ids
+  - It loads transactions via supabaseAdmin (service role) and computes:
+    - total income, total expense, category totals, top expense/income txns, recent txns
+  - AI Insights:
+    - Tries Gemini (gemini-2.0-flash via @google/generative-ai)
+    - If Gemini fails and GROQ_API_KEY exists, falls back to Groq OpenAI-compatible API
+  - PDF:
+    - Builds HTML report and renders it to a PDF using Puppeteer.
+  - Storage:
+    - Uploads PDF to Supabase Storage bucket "reports" (configurable via SUPABASE_REPORTS_BUCKET)
+    - Inserts metadata in public.user_reports
+    - Creates signed URLs for retrieval
+  - Email:
+    - Uses Brevo SMTP via nodemailer.
+    - If send_email=true, report can be queued (202) or generated synchronously.
+  - Automatic scheduling:
+    - When backend is running continuously, reportScheduler runs hourly.
+    - On the last day of the month (Asia/Kolkata by default), it generates & emails monthly reports to all profiles.
+    - On day 1, it has a catch-up safety run for previous month if backend was down on month-end.
+
+
+5. Technology Stack Used
+
+Frontend (Mobile App)
+- React Native (react-native 0.81.5)
+- Expo (expo ~54.0.25)
+- React Navigation:
+  - @react-navigation/native, native-stack, bottom-tabs
+- Supabase client:
+  - @supabase/supabase-js (frontend uses EXPO_PUBLIC_SUPABASE_URL + EXPO_PUBLIC_SUPABASE_ANON_KEY)
+- Expo APIs:
+  - expo-image-picker (receipt images)
+  - expo-notifications (notification permissions + push token)
+  - expo-constants, expo-device, expo-web-browser
+- UI/Icons:
+  - @expo/vector-icons (Ionicons/Feather/MaterialCommunityIcons)
+  - react-native-svg (custom charts and drawings)
+
+Backend
+- Node.js (ESM modules; backend/package.json has "type": "module")
+- Express (express ^5.2.1)
+- CORS middleware
+- Supabase JS client (admin client via service role)
+- AI Providers:
+  - Google Gemini:
+    - Backend: @google/generative-ai
+    - Edge Functions: direct REST call to generativelanguage.googleapis.com
+  - Groq fallback (OpenAI-compatible endpoint) for backend report insights
+- PDF generation:
+  - Puppeteer (renders HTML → PDF)
+- Email:
+  - Nodemailer + Brevo SMTP relay
+
+Database
+- Supabase Postgres (public schema tables + auth.users)
+- Supabase Storage bucket "reports" for PDFs
+- Supabase Realtime (postgres_changes subscriptions used in the app)
+
+Tools used
+- Supabase CLI (repo includes supabase/ folder with migrations and Edge Functions)
+- ESLint (eslint-config-expo flat config)
+- TypeScript config is present (tsconfig.json) but most app code is JavaScript; some UI components are TS/TSX.
+
+
+6. Project Folder Structure (Complete + Explanation)
+
+Important note about “complete”
+- This repo includes node_modules/ and backend/node_modules/, which contain thousands of installed packages. Listing every nested file is not useful for learning and would be extremely long.
+- Below, “complete structure” means:
+  - Every top-level project folder and file is listed.
+  - Each application folder (backend/, supabase/, screens/, util/, etc.) is expanded to show the important source files.
+  - node_modules/ folders are explicitly included and explained as dependency outputs.
+
+Root (mobile app + repo-wide)
+- .env
+  - Local environment variables (do not commit secrets). Used by both mobile and backend.
+- .env.example
+  - Template of required env vars (Supabase URL/keys, API URL, AI keys, email config).
+- App.js
+  - App entry point. Wraps the app in NotificationProvider and CategoryProvider and mounts AppNavigator.
+- app.json
+  - Expo app configuration (name, slug, Android package name, permissions, plugins).
+- package.json / package-lock.json
+  - Frontend dependencies + npm scripts (start, android/ios build, backend:start, tunnel helpers).
+- README.md
+  - Beginner setup guide + tunnel instructions + report scheduler behavior notes.
+- tsconfig.json
+  - TypeScript config (strict, expo base).
+- eslint.config.js
+  - ESLint flat config using eslint-config-expo.
+- PROJECT_CODE.txt
+  - A snapshot-like file containing collected code sections (reference/notes).
+- android/
+  - Native Android project generated by Expo prebuild/run (expo run:android).
+- assets/
+  - Images (icons, screenshots, login image, etc.).
+- components/
+  - Reusable UI components (headers, modals, list items, heatmap, etc.).
+- constants/
+  - App-wide theme constants (constants/theme.ts).
+- context/
+  - React Context providers:
+    - CategoryContext.js (local category arrays, not main DB storage)
+    - NotificationContext.js (loads notifications, registers device, calls backend generator)
+- data/
+  - Default category data (data/categories.js).
+- hooks/
+  - Theming-related hooks for Expo template components.
+- lib/
+  - supabase.js: creates the Supabase client for the app using EXPO_PUBLIC_* variables.
+- navigation/
+  - AppNavigator.js: auth gating + stack navigation + SMS sync hooks
+  - BottomTabs.js: Home/Accounts/Reports/Profile tab bar
+- screens/
+  - Each main app screen:
+    - Login, Register, Home, Accounts, Transactions, Budgets, Reports, Profile, Notifications, ReceiptScan, etc.
+- scripts/
+  - reset-project.js (project reset helper)
+  - set-expo-api-url.sh (writes EXPO_PUBLIC_API_URL into .env)
+  - tunnel-cloudflared.sh and tunnel-ngrok.sh (create public URL for backend on port 3000)
+- supabase/
+  - Supabase project folder:
+    - config.toml (project_id and Edge Function config)
+    - migrations/ (SQL migrations)
+    - schema_reference.sql (schema snapshot for documentation)
+    - sql/create_user_reports.sql (storage bucket + user_reports table + policies)
+    - functions/ (Edge Functions)
+- util/
+  - Business logic utilities:
+    - backendApi.js (backend URL resolution and fetch wrapper)
+    - saveTransaction.js (insert/update transactions + update balances)
+    - smsSync.js / smsParser.js / smsNative.js / bankSmsRules.js (Android SMS import)
+    - seedCategories.js (default category seeding)
+    - budgetInsights.js (budget progress and notifications helpers)
+    - loanSettlement.js (settle a loan by creating a transaction)
+    - nudgeReadState.js (key helper for storing “read” state)
+    - transactionEntry.js (choose “Receipt Scan” vs “Manual Add”)
+- theme/
+  - colors.js (UI colors used across screens/components)
+- node_modules/
+  - Installed frontend dependencies created by `npm install` (not authored code).
+
+Backend folder (backend/)
+- backend/config.js
+  - Loads environment variables from ../.env using dotenv.
+- backend/server.js
+  - Express server exposing /api/* endpoints, starts monthly report scheduler.
+- backend/supabase.js
+  - Creates supabase clients:
+    - supabase (anon key)
+    - supabaseAdmin (service role key if provided)
+- backend/generateMonthlyReport.js
+  - Core report generator: fetches transactions, computes stats, AI insights, PDF via Puppeteer, upload to Storage, email via Brevo SMTP, stores metadata in user_reports.
+- backend/notifications.js
+  - Generates and stores notifications (nudges) based on user data; optional Gemini rewrite.
+- backend/reportScheduler.js
+  - Hourly scheduler that auto-sends month-end reports (Asia/Kolkata timezone by default).
+- backend/testRun.js
+  - CLI helper to generate a report from terminal: `node testRun.js <user_id> <email> [month]`
+- backend/package.json / backend/package-lock.json
+  - Backend dependencies and scripts.
+- backend/node_modules/
+  - Installed backend dependencies created by `npm install` (not authored code).
+
+Supabase folder (supabase/)
+- supabase/config.toml
+  - project_id = "smartspend-ai"
+  - verify_jwt = false for functions:
+    - generate-analytics-summary
+    - scan-receipt-ocr
+    - classify-sms-transaction
+  - Security note: with verify_jwt=false, you must rely on other access controls (e.g., restricted API keys, private network rules) because the function will not automatically validate JWT.
+- supabase/migrations/
+  - 20260318_enable_ai_insights_rls.sql
+  - 20260321_add_budget_categories_and_metadata.sql
+  - 20260330_add_loan_settlement_fields.sql
+  - 20260423_add_notifications_system.sql
+- supabase/functions/
+  - classify-sms-transaction/index.ts (Gemini category suggestion)
+  - scan-receipt-ocr/index.ts (Gemini receipt OCR → transaction-like JSON)
+  - generate-analytics-summary/index.ts (Gemini 3-line summary)
+  - README.md (deployment instructions)
+- supabase/schema_reference.sql
+  - A documentation snapshot of the public schema used by the app.
+- supabase/sql/create_user_reports.sql
+  - Creates storage bucket "reports" and public.user_reports table with RLS policies.
+
+
+7. Database Information (Supabase / Postgres)
+
+Database used
+- Supabase Postgres (public schema) + Supabase Auth (auth.users).
+
+Source of schema details in this repo
+- supabase/schema_reference.sql (explicitly labeled as a “context only” schema reference)
+- supabase/sql/create_user_reports.sql
+- supabase/migrations/*.sql
+
+Tables (public schema)
+Below are the tables referenced by the mobile app and backend:
+
+7.1 public.profiles
+- Purpose: store user profile info (name/email) tied 1:1 with auth.users.
+- Fields:
+  - id (uuid, PK, FK → auth.users.id)
+  - name (text)
+  - email (text)
+  - created_at (timestamp)
+
+7.2 public.accounts
+- Purpose: user accounts (cash/bank/etc.) with balances.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK → auth.users.id)
+  - name (text, required)
+  - type (text, required) e.g., "bank"
+  - balance (numeric, default 0)
+  - color (text)
+  - icon (text)
+  - is_default (boolean, default false)
+  - created_at (timestamp)
+- Relationship:
+  - accounts.user_id → auth.users.id
+
+7.3 public.categories
+- Purpose: user categories for classifying transactions.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK → auth.users.id)
+  - name (text)
+  - type (text) typically "expense" or "income"
+  - icon (text)
+  - color (text)
+  - created_at (timestamp)
+- Relationship:
+  - categories.user_id → auth.users.id
+
+7.4 public.transactions
+- Purpose: transaction ledger.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK → auth.users.id)
+  - account_id (uuid, FK → public.accounts.id)
+  - category_id (uuid, FK → public.categories.id) (null for transfers)
+  - to_account_id (uuid, FK → public.accounts.id) (used for transfers)
+  - type (text) "income" | "expense" | "transfer"
+  - title (text)
+  - amount (numeric)
+  - description (text)
+  - date (date)
+  - time (time)
+  - receipt_url (text)
+  - created_at (timestamp)
+  - location (text)
+- Relationships:
+  - transactions.user_id → auth.users.id
+  - transactions.account_id → accounts.id
+  - transactions.to_account_id → accounts.id (transfer only)
+  - transactions.category_id → categories.id (income/expense)
+
+7.5 public.receipts
+- Purpose: log receipt image + extracted text and link to a created transaction.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK → auth.users.id)
+  - transaction_id (uuid, FK → public.transactions.id)
+  - image_url (text) (local uri stored by app; not necessarily a Supabase Storage URL)
+  - extracted_text (text)
+  - created_at (timestamp)
+
+7.6 public.budgets
+- Purpose: budgets for spending control.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK)
+  - name (text)
+  - amount (numeric)
+  - period (text) daily/weekly/monthly/yearly
+  - category_id (uuid, FK → categories.id)
+  - spent (numeric, default 0) (app also computes liveSpent client-side)
+  - mode (text, default "automatic")
+  - budget_type (text, default "category" or "overall")
+  - notes (text)
+  - color (text, default "#FF4433")
+  - created_at (timestamp)
+- Relationship:
+  - budgets.user_id → auth.users.id
+  - budgets.category_id → categories.id (optional)
+
+7.7 public.budget_categories
+- Purpose: link a budget to multiple categories (many-to-many).
+- Fields:
+  - budget_id (uuid, PK part, FK → budgets.id)
+  - category_id (uuid, PK part, FK → categories.id)
+  - created_at (timestamp)
+- Relationship:
+  - budget_categories.budget_id → budgets.id
+  - budget_categories.category_id → categories.id
+
+7.8 public.goals
+- Purpose: saving goals.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK)
+  - title (text)
+  - target_amount (numeric)
+  - current_amount (numeric, default 0)
+  - start_date (date)
+  - end_date (date)
+  - color (text)
+
+7.9 public.loans
+- Purpose: track borrowing/lending.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK)
+  - name (text)
+  - amount (numeric)
+  - type (text) borrowing/lending
+  - start_date (date)
+  - end_date (date)
+  - description (text)
+  - status (text, default "pending")
+  - settled_at (timestamp)
+  - settlement_transaction_id (uuid, FK → transactions.id)
+  - settlement_account_id (uuid, FK → accounts.id)
+
+7.10 public.recurring_transactions
+- Purpose: recurring items.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK)
+  - title (text)
+  - amount (numeric)
+  - type (text)
+  - period (text)
+  - next_run (date)
+  - account_id (uuid, FK → accounts.id)
+  - category_id (uuid, FK → categories.id)
+
+7.11 public.sms_transactions
+- Purpose: store SMS messages that were processed/imported (for deduplication and review).
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK)
+  - sender (text)
+  - message (text)
+  - amount (numeric)
+  - merchant (text)
+  - detected_category (text)
+  - created_at (timestamp)
+
+7.12 public.notification_preferences
+- Purpose: store a user’s push settings and generation state.
+- Fields:
+  - user_id (uuid, PK, FK → auth.users.id)
+  - push_enabled (boolean)
+  - push_permission_status (text)
+  - expo_push_token (text)
+  - language_mode (text: english/hinglish)
+  - last_generated_at (timestamptz)
+  - created_at, updated_at (timestamptz)
+- Trigger:
+  - set_notification_preferences_updated_at() trigger updates updated_at on update.
+- RLS:
+  - Policies allow users to select/insert/update their own row.
+
+7.13 public.notifications
+- Purpose: notification inbox / nudges.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK)
+  - fingerprint (text, unique per user) for deduplication
+  - title (text), body (text)
+  - tone (text), language (text), kind (text)
+  - source_module/source_entity_type/source_entity_id (provenance)
+  - metadata (jsonb)
+  - created_at (timestamptz)
+  - read_at (timestamptz), expires_at (timestamptz)
+  - push_attempted_at, push_sent_at, push_error
+- RLS:
+  - Users can select and update their own notifications.
+
+7.14 public.ai_insights
+- Purpose: store AI insight messages (RLS enabled).
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK)
+  - insight_type (text)
+  - message (text)
+  - created_at (timestamp)
+- RLS:
+  - Users can select/insert/update/delete their own rows (see migration 20260318_enable_ai_insights_rls.sql).
+
+7.15 public.user_reports
+- Purpose: store metadata for generated PDF reports stored in Supabase Storage.
+- Fields:
+  - id (uuid, PK)
+  - user_id (uuid, FK)
+  - email_to (text)
+  - filename (text)
+  - storage_path (text)
+  - report_label (text)
+  - range_start (date)
+  - range_end (date)
+  - filter_snapshot (jsonb)
+  - summary_text (text)
+  - advice_text (text)
+  - email_status (text: pending/success/skipped/...)
+  - is_automatic (boolean)
+  - generated_for_month (text)
+  - sent_at (timestamptz)
+  - created_at (timestamptz)
+- Indexes:
+  - user_reports_auto_month_unique_idx prevents duplicates for automatic month reports.
+  - user_reports_user_created_at_idx supports listing.
+- RLS:
+  - Users can select and insert their own reports.
+
+Storage (Supabase Storage)
+- Bucket: reports
+- Purpose: store generated PDF report files.
+- Table setup script: supabase/sql/create_user_reports.sql
+
+
+8. Architecture / Workflow (Step-by-step)
+
+High-level architecture
+- Mobile app (Expo / React Native)
+  - Directly reads/writes most data via Supabase (accounts, categories, transactions, budgets, etc.).
+  - Uses Supabase Realtime channels to refresh UI on DB changes.
+  - Calls:
+    - Supabase Edge Functions for receipt OCR and SMS category classification.
+    - Node backend for PDF reports and notification generation.
+- Backend (Express)
+  - Verifies user identity by validating the Supabase access token:
+    - It calls supabase.auth.getUser(token).
+  - Uses Supabase Admin client (service role) for privileged reads/writes (reports, notifications).
+  - Generates PDFs and sends emails.
+- Supabase (Auth + Postgres + Storage + Realtime + Edge Functions)
+
+Example workflow: user adds a manual expense
+1) User opens AddTransactionScreen.
+2) App collects: type/title/amount/date/time/account/category.
+3) util/saveTransaction.js inserts into public.transactions.
+4) util/saveTransaction.js updates affected account balances in public.accounts.
+5) Supabase realtime subscription (HomeScreen + other screens) receives the change and refreshes UI automatically.
+
+Example workflow: receipt scan
+1) User opens ReceiptScanScreen and picks an image.
+2) App calls Edge Function scan-receipt-ocr (Gemini).
+3) Edge Function returns parsed transaction info.
+4) App saves transaction to public.transactions and logs receipt to public.receipts.
+
+Example workflow: generate a report PDF
+1) User opens Reports tab → selects report type (month / last 30 days / filtered range).
+2) Mobile app sends POST /api/monthly-report to backend with Authorization: Bearer <Supabase access token>.
+3) Backend:
+  - Validates token with supabase.auth.getUser(token)
+  - Fetches transactions from Supabase (admin client)
+  - Computes totals + category breakdown
+  - Generates AI summary/tips
+  - Renders PDF using Puppeteer
+  - Uploads to Supabase Storage (reports bucket)
+  - Inserts record into public.user_reports
+4) Backend returns report_url (signed URL) + report metadata to the app.
+5) App opens the URL in a browser sheet (expo-web-browser) or offers “Email PDF”.
+
+Example workflow: notifications
+1) On login or on new transactions, NotificationContext calls POST /api/notifications/generate.
+2) Backend generates candidate nudges and optionally rewrites via Gemini.
+3) Backend inserts new notifications into public.notifications with dedupe fingerprint.
+4) Mobile app reloads notifications; unread count is shown via NotificationBell component.
+
+
+9. API Documentation
+
+9.1 Backend API (Express) — backend/server.js
+Base URL
+- Local dev: http://localhost:3000
+- On device: can be LAN IP (http://192.168.x.x:3000) or a tunnel URL (ngrok/cloudflared)
+- The app auto-detects candidates in util/backendApi.js, but EXPO_PUBLIC_API_URL is the recommended override.
+
+Auth
+- All “real” endpoints require:
+  - Header: Authorization: Bearer <Supabase access_token>
+- The backend verifies it using:
+  - supabase.auth.getUser(token)
+
+GET /api/health
+- Purpose: quick health check for backend connectivity.
+- Auth: none
+- Response (200):
+  - { "ok": true, "service": "smartspend-backend" }
+
+POST /api/monthly-report
+- Purpose: generate a PDF report, store it in Supabase Storage, store metadata in user_reports, optionally email it.
+- Auth: required (Bearer token)
+- Request body (supported fields from backend/server.js):
+  - month: string "YYYY-MM" (optional)
+  - range_days: number (optional)
+  - custom_start_date: string "YYYY-MM-DD" (optional)
+  - custom_end_date: string "YYYY-MM-DD" (optional)
+  - account_ids: string[] (optional)
+  - category_ids: string[] (optional)
+  - send_email: boolean (optional)
+  - email_to: string (optional; defaults to user email)
+  - transactions: array (optional; allows client-provided transactions override)
+  - report_label: string (optional)
+  - filters: object (optional; stored as filter_snapshot)
+  - is_automatic: boolean (optional; used by scheduler)
+  - generated_for_month: string (optional)
+- Response:
+  - If send_email=true, backend queues a background job and returns (202):
+    - { "success": true, "queued": true, "email_status": "queued" }
+  - If send_email=false (or synchronous completion), backend returns (200):
+    - {
+        "success": true,
+        "report_id": "...",
+        "report_url": "https://...signed-url...",
+        "filename": "report-...pdf",
+        "email_status": "skipped" | "success",
+        "summary_text": "...",
+        "advice_text": "...",
+        "created_at": "...",
+        "is_automatic": false
+      }
+- Common errors:
+  - 401: missing/invalid Authorization header
+  - 400: missing required range input (transactions[] or month/range/custom range)
+
+GET /api/reports
+- Purpose: list stored report metadata for the logged-in user.
+- Auth: required
+- Response (200):
+  - { "success": true, "reports": [ { id, filename, label, created_at, email_status, is_automatic, generated_for_month, report_url, storage_path } ] }
+
+POST /api/email-report
+- Purpose: email an existing stored PDF report to a user email.
+- Auth: required
+- Request body:
+  - report_id: string (optional, but required if filename is not used)
+  - filename: string (optional)
+  - email_to: string (required)
+- Response (200):
+  - { "success": true, "email_status": "success", "report_id": "..." }
+
+POST /api/notifications/register-device
+- Purpose: store push token and permission status in notification_preferences.
+- Auth: required
+- Request body:
+  - expo_push_token: string|null
+  - push_permission_status: string (e.g., granted/denied/undetermined/unknown)
+  - language_mode: "english" | "hinglish"
+- Response (200):
+  - {
+      "success": true,
+      "user_id": "...",
+      "push_enabled": true|false,
+      "push_permission_status": "...",
+      "language_mode": "english"|"hinglish"
+    }
+
+POST /api/notifications/generate
+- Purpose: generate and persist new notifications for a user.
+- Auth: required
+- Request body:
+  - force: boolean (optional)
+- Response (200):
+  - { "success": true, "generated": number, "pushed": number, "skipped": boolean }
+
+POST /api/sms/analyze
+- Purpose: AI “bank + transaction detection” helper used during incoming SMS processing when local bank rules do not match.
+- Auth: required
+- Request body:
+  - sender: string
+  - message: string
+- Response (200):
+  - {
+      "success": true,
+      "isTransaction": boolean,
+      "bankName": string|null,
+      "type": "debit"|"credit"|null,
+      "amount": number|null,
+      "merchant": string|null,
+      "currency": "INR"
+    }
+
+9.2 Supabase Edge Functions (Deno) — supabase/functions/*
+These are called from the mobile app using supabase.functions.invoke(...).
+
+Function: scan-receipt-ocr
+- File: supabase/functions/scan-receipt-ocr/index.ts
+- Purpose: read a receipt image (base64), extract transaction fields, suggest a category name.
+- Request body (from ReceiptScanScreen.js):
+  - userId: string
+  - imageBase64: string
+  - mimeType: string (e.g., image/jpeg)
+  - categories: [{ name: string, type: string }]
+- Response (200):
+  - {
+      "userId": "...",
+      "merchant": string|null,
+      "title": string,
+      "amount": number,
+      "date": "YYYY-MM-DD"|null,
+      "type": "income"|"expense",
+      "suggestedCategoryName": string|null,
+      "rawText": string
+    }
+
+Function: classify-sms-transaction
+- File: supabase/functions/classify-sms-transaction/index.ts
+- Purpose: given an SMS + parsed transaction fields + allowed categories, suggest one category name with confidence.
+- Request body (from util/smsSync.js):
+  - userId: string
+  - sender: string
+  - message: string
+  - parsed: { amount, merchant, type, occurredAt }
+  - categories: [{ name, type }]
+- Response (200):
+  - { "suggestedCategoryName": string|null, "confidence": number (0..1) }
+
+Function: generate-analytics-summary
+- File: supabase/functions/generate-analytics-summary/index.ts
+- Purpose: turn analytics payload into a 3-line human summary.
+- Request body:
+  - The function takes whatever analytics JSON the caller sends; it embeds it in a prompt.
+- Response (200):
+  - { "summary": "line1\nline2\nline3" }
+
+
+10. User Roles (if applicable)
+
+Roles in this project
+- This project is primarily a single-role system:
+  - User: a normal authenticated Supabase user who can only access their own rows due to RLS.
+
+Admin behavior (service role)
+- The backend can act as an admin (supabaseAdmin) when SUPABASE_SERVICE_ROLE_KEY is configured.
+- This admin client is used to:
+  - Read transactions for report generation.
+  - Upload/download from Supabase Storage.
+  - Insert notifications and user_reports records.
+- The admin role is not a “user role in the UI”; it is a backend capability.
+
+
+11. Installation Guide (From Scratch)
+
+11.1 Required software
+- Git
+- Node.js (recommended: LTS)
+- For running on Android device/emulator:
+  - Android Studio (optional but common)
+  - ADB (usually installed with Android Studio)
+- For iOS:
+  - Xcode (macOS only)
+- For Supabase local/dev (optional):
+  - Supabase CLI (already referenced in README and supabase/functions/README.md)
+
+11.2 Clone and install dependencies
+1) Clone repo and enter it:
+   - If you already have the `smartspend-ai` folder locally, skip cloning.
+   - Otherwise, clone this repository from your Git remote, then:
+     - cd smartspend-ai
+2) Install frontend dependencies:
+   - npm install
+3) Install backend dependencies:
+   - cd backend
+   - npm install
+   - cd ..
+
+11.3 Configure environment variables
+1) Copy example env:
+   - cp .env.example .env
+2) Edit .env and set:
+   - EXPO_PUBLIC_SUPABASE_URL
+   - EXPO_PUBLIC_SUPABASE_ANON_KEY
+   - EXPO_PUBLIC_API_URL (backend base URL; LAN IP or tunnel URL helps on real devices)
+   - GEMINI_API_KEY (for AI features in Edge Functions + backend)
+   - GROQ_API_KEY (optional fallback for backend report insights)
+   - Email config (for report emails):
+     - BREVO_SMTP_KEY OR BREVO_SMTP_LOGIN/BREVO_SMTP_PASSWORD
+     - EMAIL_FROM
+   - Backend scheduler/admin capabilities:
+     - SUPABASE_SERVICE_ROLE_KEY (required for automatic monthly report scheduler and admin operations)
+
+11.4 Run the backend (Express)
+Option A (from repo root):
+- npm run backend:start
+Option B (directly):
+- cd backend
+- npm start
+
+Health check:
+- Open: http://localhost:3000/api/health
+
+11.5 Run the mobile app (Expo)
+From repo root:
+- npm start
+or
+- npx expo start
+
+If you need SMS import (Android) or native modules:
+- Use dev-client:
+  - npm run start:devclient
+  - Then install/run on device:
+    - npm run android
+
+11.6 Using a tunnel for real devices on mobile data
+If the phone is not on the same Wi-Fi as the backend machine, a local LAN URL will fail.
+The repo includes helper scripts:
+- Start backend:
+  - npm run backend:start
+- Start tunnel:
+  - npm run tunnel:ngrok
+  - or npm run tunnel:cloudflared
+- Update EXPO_PUBLIC_API_URL in .env:
+  - bash scripts/set-expo-api-url.sh https://YOUR_TUNNEL_URL
+- Restart Expo:
+  - npm run start:devclient
+
+11.7 Deploying Supabase Edge Functions (optional, for production)
+- Follow supabase/functions/README.md.
+- Key steps:
+  - supabase login
+  - supabase link --project-ref <your-project-ref>
+  - supabase secrets set GEMINI_API_KEY="..."
+  - supabase functions deploy generate-analytics-summary
+  - supabase functions deploy scan-receipt-ocr
+  - supabase functions deploy classify-sms-transaction
+
+
+12. Dependencies (Packages/Modules Used + Why)
+
+12.1 Frontend (package.json)
+- expo, react, react-native
+  - Core framework for the app.
+- @supabase/supabase-js
+  - Auth + database queries + storage + edge function invocations.
+- @react-navigation/* (native, native-stack, bottom-tabs, elements)
+  - Navigation stacks and tabs.
+- @react-native-async-storage/async-storage
+  - Persists Supabase session on device.
+- expo-image-picker
+  - Pick/capture receipt images for OCR.
+- expo-notifications + expo-device + expo-constants
+  - Push permission flow and device context; backend stores expo_push_token.
+- expo-web-browser
+  - Open signed PDF URLs in-app.
+- react-native-svg
+  - Custom charts and shapes (reports, analytics visuals).
+- react-native-sms-module
+  - Android dev-client module for SMS reading and listener (disabled in Expo Go).
+- typescript + eslint + eslint-config-expo
+  - Development tooling.
+- supabase (CLI package)
+  - Supabase project management from CLI (migrations/functions).
+
+12.2 Backend (backend/package.json)
+- express
+  - REST API server.
+- cors
+  - Allow mobile app requests in development.
+- dotenv
+  - Loads root .env for backend configuration.
+- @supabase/supabase-js
+  - Server-side Supabase access (including admin service role).
+- @google/generative-ai
+  - Gemini client for generating report insights and rewriting notification text.
+- puppeteer
+  - HTML → PDF rendering for monthly reports.
+- nodemailer
+  - Send report PDFs by email via Brevo SMTP.
+
+
+13. Important Files Explanation (Key Files)
+
+Mobile app
+- App.js
+  - Root component wiring NotificationProvider + CategoryProvider + AppNavigator.
+- lib/supabase.js
+  - Supabase client creation using EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY with AsyncStorage session persistence.
+- navigation/AppNavigator.js
+  - Auth gate (Login/Register vs Main app) and initial setup:
+    - seeds categories for new users
+    - triggers SMS sync (Android)
+    - sets up incoming SMS listener (Android dev-client)
+- context/NotificationContext.js
+  - Fetches notification inbox, registers device preference, calls backend generator, realtime subscription to auto-refresh.
+- util/saveTransaction.js
+  - The “source of truth” for transaction inserts/updates + account balance impact logic.
+- util/backendApi.js
+  - Figures out the best backend base URL and wraps fetch with timeouts and safer JSON parsing.
+
+Backend
+- backend/server.js
+  - Defines all REST endpoints and token validation flow; starts report scheduler.
+- backend/generateMonthlyReport.js
+  - Report logic: query Supabase, compute totals, AI prompt, PDF render, upload, signed URL creation, email.
+- backend/notifications.js
+  - Notification candidate generation + optional Gemini rewrite + persistence to Supabase.
+- backend/reportScheduler.js
+  - Hourly loop for automatic month-end reporting.
+
+Supabase
+- supabase/schema_reference.sql
+  - Clear schema snapshot used for documentation and understanding.
+- supabase/migrations/*.sql
+  - Adds RLS and notification/budget/loan fields.
+- supabase/functions/*/index.ts
+  - AI-powered Edge Functions (receipt OCR + SMS category suggestion + short analytics summary).
+
+
+14. Screens / Pages Description (Mobile UI)
+
+Authentication
+- LoginScreen
+  - Email/password login via Supabase Auth.
+- RegisterScreen
+  - Creates Supabase user, then inserts into profiles table.
+
+Main tabs (BottomTabs.js)
+- HomeScreen
+  - Dashboard: balance summary, transaction feed, weekly summary bars, budget insights, due loans prompt, quick add transaction (manual or receipt scan).
+  - Subscribes to realtime changes for transactions/accounts/categories/budgets/loans.
+- AccountsScreen
+  - Account overview, account-specific transactions, realtime updates, manage accounts.
+- ReportsScreen
+  - Report generation UI:
+    - Monthly report
+    - Last 30 days
+    - Filtered reports by account/category/date
+  - Lists stored reports (user_reports) and supports:
+    - open PDF (signed URL)
+    - email PDF (backend /api/email-report)
+- ProfileScreen
+  - Update name and email (auth email update + profiles upsert), sign out.
+
+Additional stack screens (AppNavigator.js)
+- TransactionsScreen
+  - Detailed transaction list with filters and weekly summary mode.
+- AddTransactionScreen
+  - Create/update income/expense/transfer.
+- CategoriesScreen / AddCategoryScreen / CategoryDetailsScreen
+  - Manage categories and view category-related info.
+- BudgetsScreen / AddBudgetScreen
+  - Create/update budgets and track progress.
+- GoalsScreen / AddGoalScreen
+  - Manage saving goals.
+- LoansScreen / AddLoanScreen
+  - Manage loans and settlements.
+- RecurringScreen / AddRecurringScreen
+  - Manage recurring items.
+- NotificationsScreen
+  - Shows notification inbox; pull-to-refresh triggers new generation.
+- ReceiptScanScreen
+  - Camera/gallery receipt scan → OCR → auto transaction save.
+- AnalyticsScreen
+  - Analytics views and charts based on stored transactions (category breakdown, cash flow, etc.).
+- CalendarHeatmapScreen
+  - Visual heatmap of activity/spending patterns.
+
+
+15. Project Execution Flow (How the app runs internally)
+
+Startup
+1) Expo loads App.js.
+2) NotificationProvider initializes:
+  - loads notifications from Supabase
+  - registers notification permissions and device settings
+  - calls backend to generate nudges (throttled)
+  - attaches realtime channel for notifications and transaction inserts
+3) AppNavigator checks Supabase session:
+  - If no session: show Login/Register
+  - If session exists:
+    - seed categories (only if user has none)
+    - run SMS sync (Android, if dev-client module is available)
+    - attach SMS listener (Android)
+    - render BottomTabs
+
+Runtime data flow (most screens)
+- Screens read and write data via Supabase queries.
+- Many screens attach Supabase realtime subscriptions so UI stays up-to-date without manual refresh.
+
+Backend-dependent flows
+- Reports:
+  - Mobile calls backend APIs using access token.
+  - Backend uses service role for storage/report operations.
+- Notification generation:
+  - Mobile requests generation; backend writes notifications to DB; mobile reads them normally.
+
+
+16. Challenges and Solutions (From the codebase)
+
+Backend reachability from a real phone
+- Problem:
+  - A phone on mobile data cannot access http://192.168.x.x:3000 on your laptop.
+- Solution included in repo:
+  - ngrok/cloudflared tunnel scripts and a helper script to set EXPO_PUBLIC_API_URL in .env:
+    - scripts/tunnel-ngrok.sh
+    - scripts/tunnel-cloudflared.sh
+    - scripts/set-expo-api-url.sh
+
+AI provider reliability
+- Problem:
+  - AI calls can fail, timeout, or return non-JSON.
+- Solutions:
+  - backend/generateMonthlyReport.js:
+    - wraps Gemini call in a timeout
+    - falls back to Groq if configured
+    - falls back to a safe default summary/tips if AI fails
+  - Edge functions:
+    - sanitize markdown fences and validate response JSON shape before returning.
+
+SMS parsing noise and privacy concerns
+- Problem:
+  - SMS inbox has OTPs and non-transaction messages; parsing can create wrong transactions.
+- Solutions:
+  - smsSync.js:
+    - filters OTP-like messages
+    - requires bank sender matching rules
+    - uses “fingerprints” to avoid duplicates
+    - uses AI only as a helper (category suggestion) and only if confidence is sufficient
+
+
+17. Future Scope / Improvements (Based on current design)
+
+Security hardening for Edge Functions
+- supabase/config.toml sets verify_jwt=false for Edge Functions.
+- A production deployment should typically enable JWT verification or enforce strict API key/client restrictions.
+
+Centralized analytics summary usage
+- generate-analytics-summary exists but is not currently referenced from the mobile code in this repo.
+- Next step could be wiring AnalyticsScreen to call it for a “3-line summary” card.
+
+Receipt image storage
+- receipts.image_url currently stores the local device uri.
+- Consider uploading receipt images to Supabase Storage and saving a stable storage URL.
+
+Better role model
+- If the project expands (family accounts / team budgets), add explicit roles and sharing policies.
+
+Testing
+- There are no real tests configured (backend test script is a placeholder).
+- Adding basic unit tests for:
+  - saveTransaction balance math
+  - SMS parsing edge cases
+  - backend report date range helpers
+  would reduce regressions.
+
+
+18. Conclusion
+SmartSpend AI is a full-stack personal finance tracker:
+- Mobile app: React Native + Expo with Supabase for auth/data/realtime and Edge Functions for AI OCR/classification.
+- Backend: Express service for heavy server tasks (PDF generation, email sending, scheduled month-end jobs, AI-driven nudges).
+- Database: Supabase Postgres with RLS, plus Storage for report PDFs.
+
+The project’s most important “learning-friendly” idea is that most app data is handled directly by Supabase from the mobile client, and the backend only exists for tasks that are better on a server (PDF/email/scheduling and some AI workflows).

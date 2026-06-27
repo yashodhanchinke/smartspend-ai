@@ -24,16 +24,59 @@ export default function AddLoanScreen({ navigation, route }) {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!loan) {
-      return;
-    }
+    let isMounted = true;
 
-    setLoanType(loan.type === "borrowing" ? "borrow" : "lend");
-    setName(loan.name || "");
-    setAmount(String(loan.amount ?? ""));
-    setDescription(loan.description || "");
-    setStartDate(loan.start_date ? new Date(loan.start_date) : new Date());
-    setEndDate(loan.end_date ? new Date(loan.end_date) : new Date());
+    const loadLoan = async () => {
+      if (!loan?.id) {
+        if (loan) {
+          setLoanType(loan.type === "borrowing" ? "borrow" : "lend");
+          setName(loan.name || "");
+          setAmount(String(loan.amount ?? ""));
+          setDescription(loan.description || "");
+          setStartDate(loan.start_date ? new Date(loan.start_date) : new Date());
+          setEndDate(loan.end_date ? new Date(loan.end_date) : new Date());
+        }
+        return;
+      }
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user || !isMounted) {
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("loans")
+        .select("id,name,amount,type,start_date,end_date,description,status")
+        .eq("id", loan.id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (error) {
+        console.warn("Could not load loan details:", error.message);
+      }
+
+      const nextLoan = data || loan;
+
+      if (!isMounted || !nextLoan) {
+        return;
+      }
+
+      setLoanType(nextLoan.type === "borrowing" ? "borrow" : "lend");
+      setName(nextLoan.name || "");
+      setAmount(String(nextLoan.amount ?? ""));
+      setDescription(nextLoan.description || "");
+      setStartDate(nextLoan.start_date ? new Date(nextLoan.start_date) : new Date());
+      setEndDate(nextLoan.end_date ? new Date(nextLoan.end_date) : new Date());
+    };
+
+    loadLoan();
+
+    return () => {
+      isMounted = false;
+    };
   }, [loan]);
 
   const saveLoan = async () => {

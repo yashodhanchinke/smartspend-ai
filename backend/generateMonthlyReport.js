@@ -1,116 +1,12 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { google } from 'googleapis';
 import puppeteer from 'puppeteer';
 import './config.js';
 import { supabaseAdmin } from './supabase.js';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
+import nodemailer from 'nodemailer';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const REPORTS_BUCKET = process.env.SUPABASE_REPORTS_BUCKET || 'reports';
-const DEFAULT_TOKEN_CANDIDATES = [
-  path.join(os.homedir(), '.config', 'smartspend-ai', 'gmail_token.json'),
-  path.join('/tmp', 'smartspend-ai', 'gmail_token.json'),
-];
-
-function resolvePrimaryTokenPath() {
-  if (process.env.GMAIL_TOKEN_PATH) return process.env.GMAIL_TOKEN_PATH;
-  return DEFAULT_TOKEN_CANDIDATES[0];
-}
-
-function resolveReadableDefaultTokenPath() {
-  for (const candidate of DEFAULT_TOKEN_CANDIDATES) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return resolvePrimaryTokenPath();
-}
-
-const PRIMARY_TOKEN_PATH = resolvePrimaryTokenPath();
-const DEFAULT_TOKEN_PATH = resolveReadableDefaultTokenPath();
 let sharedBrowser = null;
-
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GMAIL_CLIENT_ID,
-  process.env.GMAIL_CLIENT_SECRET,
-  process.env.GMAIL_REDIRECT_URI || 'http://localhost:3000'
-);
-
-let hasAuth = false;
-
-function tryLoadTokenFromFile(tokenPath, { label, warnIfLegacy } = {}) {
-  if (!tokenPath || !fs.existsSync(tokenPath)) return false;
-  try {
-    const token = JSON.parse(fs.readFileSync(tokenPath, 'utf-8'));
-    oauth2Client.setCredentials(token);
-    hasAuth = true;
-
-    if (warnIfLegacy) {
-      console.warn(`[Gmail] Using legacy token file at ${tokenPath}. Consider moving it to ${PRIMARY_TOKEN_PATH} and adding it to .gitignore.`);
-    } else {
-      console.info(`[Gmail] Using authentication from ${label || tokenPath}`);
-    }
-    return true;
-  } catch (err) {
-    console.warn(`[Gmail] Failed to parse token file at ${tokenPath}:`, err.message);
-    return false;
-  }
-}
-
-function ensureTokenDir(tokenPath) {
-  const dir = path.dirname(tokenPath);
-  fs.mkdirSync(dir, { recursive: true });
-}
-
-function persistTokenIfMissing(sourcePath) {
-  if (!sourcePath || sourcePath === PRIMARY_TOKEN_PATH) return;
-  if (!oauth2Client.credentials || Object.keys(oauth2Client.credentials).length === 0) return;
-  try {
-    if (fs.existsSync(PRIMARY_TOKEN_PATH)) return;
-    ensureTokenDir(PRIMARY_TOKEN_PATH);
-    fs.writeFileSync(PRIMARY_TOKEN_PATH, JSON.stringify(oauth2Client.credentials), 'utf-8');
-    console.info(`[Gmail] Copied token to ${PRIMARY_TOKEN_PATH} for future runs.`);
-  } catch (err) {
-    console.warn('[Gmail] Failed to persist token to primary path:', err.message);
-  }
-}
-
-// Priority 1: Explicit JSON via env (useful for CI/containers)
-if (process.env.GMAIL_TOKEN_JSON) {
-  try {
-    oauth2Client.setCredentials(JSON.parse(process.env.GMAIL_TOKEN_JSON));
-    hasAuth = true;
-    console.info('[Gmail] Using authentication from GMAIL_TOKEN_JSON');
-  } catch (err) {
-    console.warn('[Gmail] Failed to parse GMAIL_TOKEN_JSON:', err.message);
-  }
-}
-
-// Priority 2: Fallback to env-based refresh token
-if (!hasAuth && process.env.GMAIL_REFRESH_TOKEN) {
-  oauth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
-  hasAuth = true;
-  console.info('[Gmail] Using authentication from environment variables');
-}
-
-// Priority 3: Token file outside the repo (default)
-if (!hasAuth) {
-  // Prefer explicit path, but also allow the default candidate that actually exists.
-  if (!tryLoadTokenFromFile(PRIMARY_TOKEN_PATH, { label: 'GMAIL_TOKEN_PATH' })) {
-    tryLoadTokenFromFile(DEFAULT_TOKEN_PATH, { label: 'default token path' });
-  }
-}
-
-// Priority 4: Legacy in-repo paths (migration only)
-if (!hasAuth) {
-  const legacyCwdToken = path.join(process.cwd(), 'token.json');
-  const legacyBackendToken = path.join(process.cwd(), 'backend', 'token.json');
-
-  if (tryLoadTokenFromFile(legacyCwdToken, { warnIfLegacy: true })) persistTokenIfMissing(legacyCwdToken);
-  else if (tryLoadTokenFromFile(legacyBackendToken, { warnIfLegacy: true })) persistTokenIfMissing(legacyBackendToken);
-}
-
-const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
 function sanitizeLabel(value, fallback = 'report') {
   const normalized = String(value || fallback)
@@ -247,60 +143,41 @@ async function getSharedBrowser() {
   return sharedBrowser;
 }
 
-function createRawMessage(to, subject, text, attachmentData, pdfName) {
-  const boundary = `smartspend_boundary_${Date.now()}`;
-  const sender = process.env.GMAIL_SENDER_ADDRESS || 'no-reply@smartspend.local';
-
-  const parts = [
-    `To: ${to}`,
-    `From: SmartSpend AI <${sender}>`,
-    `Subject: ${subject}`,
-    'MIME-Version: 1.0',
-    `Content-Type: multipart/mixed; boundary=${boundary}`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/plain; charset=utf-8',
-    'Content-Transfer-Encoding: 7bit',
-    '',
-    text,
-    '',
-  ];
-
-  if (attachmentData) {
-    parts.push(`--${boundary}`);
-    parts.push(`Content-Type: application/pdf; name="${pdfName}"`);
-    parts.push(`Content-Disposition: attachment; filename="${pdfName}"`);
-    parts.push('Content-Transfer-Encoding: base64');
-    parts.push('');
-    parts.push(Buffer.from(attachmentData).toString('base64'));
-    parts.push('');
-  }
-
-  parts.push(`--${boundary}--`);
-
-  return Buffer.from(parts.join('\n'))
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-}
-
 async function sendPdfEmail({ pdfBuffer, toEmail, subject, text, attachmentName }) {
-  if (!hasAuth) {
-    throw new Error('Gmail API not configured. Set GMAIL_REFRESH_TOKEN in backend env.');
+  const brevoKey = process.env.BREVO_SMTP_KEY || '';
+  const brevoLogin = process.env.BREVO_SMTP_LOGIN || '';
+  const brevoPassword = process.env.BREVO_SMTP_PASSWORD || '';
+  const mailFrom = process.env.EMAIL_FROM || 'no-reply@smartspend.local';
+
+  if (!(brevoKey || (brevoLogin && brevoPassword))) {
+    throw new Error('Email not configured. Set BREVO_SMTP_KEY or BREVO_SMTP_LOGIN/BREVO_SMTP_PASSWORD in backend env.');
   }
 
-  const rawMessage = createRawMessage(
-    toEmail,
-    subject || 'Your SmartSpend Report',
-    text || 'Attached is your requested report PDF.',
-    pdfBuffer,
-    attachmentName || 'SmartSpend_Report.pdf'
-  );
+  const smtpUser = brevoLogin || 'apikey';
+  const smtpPass = brevoPassword || brevoKey;
 
-  await gmail.users.messages.send({
-    userId: 'me',
-    requestBody: { raw: rawMessage },
+  const transporter = nodemailer.createTransport({
+    host: 'smtp-relay.brevo.com',
+    port: 587,
+    secure: false,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+
+  await transporter.sendMail({
+    from: mailFrom,
+    to: toEmail,
+    subject: subject || 'Your SmartSpend Report',
+    text: text || 'Attached is your requested report PDF.',
+    attachments: [
+      {
+        filename: attachmentName || 'SmartSpend_Report.pdf',
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ],
   });
 }
 

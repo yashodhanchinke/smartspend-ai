@@ -69,6 +69,7 @@ CREATE TABLE public.budgets (
   budget_type text DEFAULT 'category'::text,
   notes text,
   color text DEFAULT '#FF4433'::text,
+  show_on_home boolean DEFAULT false,
   CONSTRAINT budgets_pkey PRIMARY KEY (id),
   CONSTRAINT budgets_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
   CONSTRAINT budgets_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.categories(id)
@@ -250,6 +251,8 @@ CREATE TABLE public.transactions (
   user_id uuid,
   account_id uuid,
   category_id uuid,
+  goal_id uuid,
+  loan_id uuid,
   type text,
   title text,
   amount numeric,
@@ -263,6 +266,8 @@ CREATE TABLE public.transactions (
   CONSTRAINT transactions_pkey PRIMARY KEY (id),
   CONSTRAINT transactions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
   CONSTRAINT transactions_category_id_fkey FOREIGN KEY (category_id) REFERENCES public.categories(id),
+  CONSTRAINT transactions_goal_id_fkey FOREIGN KEY (goal_id) REFERENCES public.goals(id),
+  CONSTRAINT transactions_loan_id_fkey FOREIGN KEY (loan_id) REFERENCES public.loans(id),
   CONSTRAINT transactions_to_account_id_fkey FOREIGN KEY (to_account_id) REFERENCES public.accounts(id)
 );
 CREATE TABLE public.user_reports (

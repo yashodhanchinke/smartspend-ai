@@ -1,7 +1,7 @@
 import Feather from "@expo/vector-icons/Feather";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ScrollView,
   StyleSheet,
@@ -342,6 +342,12 @@ export default function TransactionsScreen({ navigation, route }) {
                       categoryColor={item.categories?.color || "#5a4138"}
                       categoryIcon={item.categories?.icon || "credit-card-outline"}
                       showDivider={index !== group.items.length - 1}
+                      onPress={() =>
+                        navigation.navigate("UpdateTransaction", {
+                          transaction: item,
+                          returnTab: "Home",
+                        })
+                      }
                     />
                   );
                 })}

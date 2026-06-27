@@ -89,6 +89,7 @@ export async function settleLoan({ loan, userId }) {
     time: new Date().toTimeString().split(" ")[0],
     accountId: account.id,
     categoryId: null,
+    loanId: loan.id,
   });
 
   const { error } = await supabase
@@ -112,4 +113,3 @@ export async function settleLoan({ loan, userId }) {
     transactionType: isBorrowing ? "expense" : "income",
   };
 }
-

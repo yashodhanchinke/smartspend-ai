@@ -23,6 +23,7 @@ export default function AddTransactionScreen({ navigation, route }) {
   const isEditMode = route?.name === "UpdateTransaction" || Boolean(transaction?.id);
   const screenTitle = isEditMode ? "Update Transaction" : "Add Transaction";
   const saveLabel = isEditMode ? "Update" : "Add";
+  const returnTab = route?.params?.returnTab || null;
 
   const [type, setType] = useState("expense");
   const [title, setTitle] = useState("");
@@ -31,9 +32,15 @@ export default function AddTransactionScreen({ navigation, route }) {
 
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [labels, setLabels] = useState([]);
+  const [goals, setGoals] = useState([]);
+  const [loans, setLoans] = useState([]);
+  const [selectedLabels, setSelectedLabels] = useState([]);
 
   const [selectedAccount, setSelectedAccount] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState(null);
+  const [selectedGoal, setSelectedGoal] = useState(null);
+  const [selectedLoan, setSelectedLoan] = useState(null);
   const [transferAccount, setTransferAccount] = useState(null);
 
   const [date, setDate] = useState(new Date());
@@ -54,6 +61,7 @@ export default function AddTransactionScreen({ navigation, route }) {
     setType(transaction.type || "expense");
     setTitle(transaction.title || "");
     setAmount(String(transaction.amount ?? ""));
+    setSelectedLoan(null);
 
     const baseDate = transaction.date
       ? new Date(`${transaction.date}T${transaction.time || "00:00:00"}`)
@@ -62,7 +70,16 @@ export default function AddTransactionScreen({ navigation, route }) {
   }, [route?.params?.date, transaction]);
 
   const fetchAccounts = useCallback(async () => {
-    const { data } = await supabase.from("accounts").select("*");
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setAccounts([]);
+      return;
+    }
+
+    const { data } = await supabase.from("accounts").select("*").eq("user_id", user.id);
     const nextAccounts = data || [];
     setAccounts(nextAccounts);
 
@@ -88,9 +105,19 @@ export default function AddTransactionScreen({ navigation, route }) {
   }, [route?.params?.accountId, transaction]);
 
   const fetchCategories = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setCategories([]);
+      return;
+    }
+
     const { data } = await supabase
       .from("categories")
       .select("*")
+      .eq("user_id", user.id)
       .eq("type", type);
 
     const nextCategories = data || [];
@@ -103,6 +130,156 @@ export default function AddTransactionScreen({ navigation, route }) {
     }
   }, [transaction, type]);
 
+  const fetchLabels = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setLabels([]);
+      return;
+    }
+
+    const { data } = await supabase
+      .from("labels")
+      .select("id,name,color")
+      .eq("user_id", user.id)
+      .order("name");
+
+    setLabels(data || []);
+  }, []);
+
+  const fetchGoals = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setGoals([]);
+      return;
+    }
+
+    const { data } = await supabase
+      .from("goals")
+      .select("id,title,target_amount,current_amount,start_date,end_date,color")
+      .eq("user_id", user.id)
+      .order("end_date", { ascending: true });
+
+    setGoals(data || []);
+  }, []);
+
+  const fetchLoans = useCallback(async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setLoans([]);
+      return;
+    }
+
+    const { data } = await supabase
+      .from("loans")
+      .select("id,name,amount,type,start_date,end_date,status")
+      .eq("user_id", user.id)
+      .order("end_date", { ascending: false });
+
+    setLoans(data || []);
+  }, []);
+
+  const fetchTransactionLabels = useCallback(async () => {
+    if (!transaction?.id) {
+      setSelectedLabels([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("transaction_labels")
+      .select(`
+        label_id,
+        labels (
+          id,
+          name,
+          color
+        )
+      `)
+      .eq("transaction_id", transaction.id);
+
+    if (error) {
+      console.warn("Could not load transaction labels:", error.message);
+      setSelectedLabels([]);
+      return;
+    }
+
+    setSelectedLabels(
+      (data || [])
+        .map((row) => row.labels)
+        .filter(Boolean)
+    );
+  }, [transaction?.id]);
+
+  const fetchTransactionGoal = useCallback(async () => {
+    if (!transaction?.goal_id) {
+      setSelectedGoal(null);
+      return;
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setSelectedGoal(null);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("goals")
+      .select("id,title,target_amount,current_amount,start_date,end_date,color")
+      .eq("id", transaction.goal_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Could not load transaction goal:", error.message);
+      setSelectedGoal(null);
+      return;
+    }
+
+    setSelectedGoal(data || null);
+  }, [transaction?.goal_id]);
+
+  const fetchTransactionLoan = useCallback(async () => {
+    if (!transaction?.loan_id) {
+      setSelectedLoan(null);
+      return;
+    }
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    if (!user) {
+      setSelectedLoan(null);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("loans")
+      .select("id,name,amount,type,start_date,end_date,status")
+      .eq("id", transaction.loan_id)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      console.warn("Could not load transaction loan:", error.message);
+      setSelectedLoan(null);
+      return;
+    }
+
+    setSelectedLoan(data || null);
+  }, [transaction?.loan_id]);
+
   /* ================= LOAD DATA ================= */
 
   useEffect(() => {
@@ -114,8 +291,55 @@ export default function AddTransactionScreen({ navigation, route }) {
   }, [fetchCategories, type]);
 
   useEffect(() => {
+    fetchLabels();
+  }, [fetchLabels]);
+
+  useEffect(() => {
+    fetchGoals();
+  }, [fetchGoals]);
+
+  useEffect(() => {
+    fetchLoans();
+  }, [fetchLoans]);
+
+  useEffect(() => {
+    fetchTransactionLabels();
+  }, [fetchTransactionLabels]);
+
+  useEffect(() => {
+    fetchTransactionGoal();
+  }, [fetchTransactionGoal]);
+
+  useEffect(() => {
+    fetchTransactionLoan();
+  }, [fetchTransactionLoan]);
+
+  useEffect(() => {
+    if (type === "transfer") {
+      setSelectedLoan(null);
+      return;
+    }
+
+    const preselectedLoanId = route?.params?.loanId || transaction?.loan_id || null;
+
+    if (!preselectedLoanId || loans.length === 0) {
+      return;
+    }
+
+    const matchedLoan = loans.find((item) => item.id === preselectedLoanId) || null;
+    setSelectedLoan(matchedLoan);
+
+    if (!transaction && matchedLoan && route?.params?.loanTransactionType) {
+      setType(route.params.loanTransactionType);
+    }
+  }, [loans, route?.params?.loanId, route?.params?.loanTransactionType, transaction, type]);
+
+  useEffect(() => {
     if (type === "transfer") {
       setSelectedCategory(null);
+      setSelectedLabels([]);
+      setSelectedGoal(null);
+      setSelectedLoan(null);
     } else if (transaction?.type !== type) {
       setSelectedCategory(null);
     }
@@ -144,6 +368,22 @@ export default function AddTransactionScreen({ navigation, route }) {
     }
   };
 
+  const toggleLabel = (label) => {
+    setSelectedLabels((current) => {
+      const exists = current.some((item) => item.id === label.id);
+
+      if (exists) {
+        return current.filter((item) => item.id !== label.id);
+      }
+
+      return [...current, label];
+    });
+  };
+
+  const selectGoal = (goal) => {
+    setSelectedGoal((current) => (current?.id === goal.id ? null : goal));
+  };
+
   /* ================= SAVE ================= */
 
   const handleSave = async () => {
@@ -153,8 +393,8 @@ export default function AddTransactionScreen({ navigation, route }) {
       return;
     }
 
-    if (type !== "transfer" && !selectedCategory) {
-      Alert.alert("Error", "Select category");
+    if (type !== "transfer" && !selectedCategory && !selectedLoan) {
+      Alert.alert("Error", "Select category or loan");
       return;
     }
 
@@ -170,7 +410,7 @@ export default function AddTransactionScreen({ navigation, route }) {
     } = await supabase.auth.getUser();
 
     try {
-      const payload = {
+    const payload = {
         userId: user.id,
         type,
         title,
@@ -179,8 +419,11 @@ export default function AddTransactionScreen({ navigation, route }) {
         date: date.toISOString().split("T")[0],
         time: date.toTimeString().split(" ")[0],
         accountId: selectedAccount.id,
-        categoryId: type === "transfer" ? null : selectedCategory.id,
+        categoryId: type === "transfer" ? null : selectedCategory?.id || null,
         toAccountId: type === "transfer" ? transferAccount.id : null,
+        labelIds: type === "transfer" ? [] : selectedLabels.map((label) => label.id),
+        goalId: type === "transfer" ? null : selectedGoal?.id || null,
+        loanId: type === "transfer" ? null : selectedLoan?.id || null,
       };
 
       if (isEditMode) {
@@ -200,7 +443,19 @@ export default function AddTransactionScreen({ navigation, route }) {
     setLoading(false);
 
     Alert.alert("Success", isEditMode ? "Transaction updated" : "Transaction added");
-    navigation.goBack();
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+
+    // Fallback: if this screen was opened without a back stack (e.g. deep link / refresh),
+    // send the user to a safe place.
+    if (returnTab) {
+      navigation.navigate("Main", { screen: returnTab });
+      return;
+    }
+
+    navigation.navigate("Main", { screen: "Home" });
   };
 
   /* ================= UI ================= */
@@ -359,10 +614,14 @@ export default function AddTransactionScreen({ navigation, route }) {
         )}
 
         {type !== "transfer" && (
-          <View style={styles.sectionCard}>
-            <Text style={styles.sectionTitle}>Select Category</Text>
-            <View style={styles.wrap}>
-              {categories.map((cat) => (
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Select Category</Text>
+          <View style={styles.wrap}>
+              {categories.length === 0 ? (
+                <View style={styles.emptyBlock}>
+                  <Text style={styles.emptyBlockText}>No data</Text>
+                </View>
+              ) : categories.map((cat) => (
                 <TouchableOpacity
                   key={cat.id}
                   style={[
@@ -384,7 +643,118 @@ export default function AddTransactionScreen({ navigation, route }) {
                   ) : null}
                 </TouchableOpacity>
               ))}
-            </View>
+          </View>
+        </View>
+        )}
+
+        {type !== "transfer" && (
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Select Loan</Text>
+            {loans.length === 0 ? (
+              <View style={styles.emptyBlock}>
+                <Text style={styles.emptyBlockText}>No data</Text>
+              </View>
+            ) : (
+              <View style={styles.wrap}>
+                {loans.map((loan) => {
+                  const isSelected = selectedLoan?.id === loan.id;
+                  return (
+                    <TouchableOpacity
+                      key={loan.id}
+                      style={[
+                        styles.loanChip,
+                        isSelected && styles.activeLoanChip,
+                      ]}
+                      onPress={() => setSelectedLoan(isSelected ? null : loan)}
+                    >
+                      <View style={styles.loanChipHeader}>
+                        <MaterialCommunityIcons
+                          name={loan.type === "borrowing" ? "cash-minus" : "cash-plus"}
+                          size={18}
+                          color={loan.type === "borrowing" ? "#ffb49a" : colors.gold}
+                        />
+                        {isSelected ? (
+                          <MaterialCommunityIcons name="check-circle" size={18} color={colors.gold} />
+                        ) : null}
+                      </View>
+                      <Text style={styles.loanText} numberOfLines={1}>{loan.name || "Loan"}</Text>
+                      <Text style={styles.loanMeta}>{loan.type === "borrowing" ? "Borrowing" : "Lending"}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        )}
+
+        {type !== "transfer" && (
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Select Goal</Text>
+            {goals.length === 0 ? (
+              <View style={styles.emptyBlock}>
+                <Text style={styles.emptyBlockText}>No data</Text>
+              </View>
+            ) : (
+              <View style={styles.wrap}>
+                {goals.map((goal) => {
+                  const target = Number(goal.target_amount || 0);
+                  const current = Number(goal.current_amount || 0);
+                  const progress = target > 0 ? Math.min(current / target, 1) : 0;
+
+                  return (
+                    <TouchableOpacity
+                      key={goal.id}
+                      style={[
+                        styles.goalChip,
+                        selectedGoal?.id === goal.id && styles.activeGoalChip,
+                      ]}
+                      onPress={() => selectGoal(goal)}
+                    >
+                      <View style={styles.goalChipHeader}>
+                        <View style={[styles.goalDot, { backgroundColor: goal.color || colors.gold }]} />
+                        <Text style={styles.goalText} numberOfLines={1}>
+                          {goal.title || "Goal"}
+                        </Text>
+                      </View>
+                      <Text style={styles.goalMeta}>
+                        {Math.round(progress * 100)}%
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        )}
+
+        {type !== "transfer" && (
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Labels</Text>
+            {labels.length === 0 ? (
+              <View style={styles.emptyBlock}>
+                <Text style={styles.emptyBlockText}>No data</Text>
+              </View>
+            ) : (
+              <View style={styles.wrap}>
+                {labels.map((label) => (
+                  <TouchableOpacity
+                    key={label.id}
+                    style={[
+                      styles.labelChip,
+                      selectedLabels.some((item) => item.id === label.id) && styles.activeLabelChip,
+                      { borderColor: label.color || colors.gold },
+                    ]}
+                    onPress={() => toggleLabel(label)}
+                  >
+                    <View style={[styles.labelDot, { backgroundColor: label.color || colors.gold }]} />
+                    <Text style={styles.labelText}>{label.name}</Text>
+                    {selectedLabels.some((item) => item.id === label.id) ? (
+                      <MaterialCommunityIcons name="check-circle" size={18} color={colors.gold} />
+                    ) : null}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
           </View>
         )}
 
@@ -563,6 +933,110 @@ const styles = StyleSheet.create({
   activeCategoryChip: {
     borderColor: colors.gold,
     backgroundColor: "#4a312a",
+  },
+  goalChip: {
+    minWidth: "47%",
+    backgroundColor: "#412d28",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#5b433c",
+  },
+  activeGoalChip: {
+    borderColor: colors.gold,
+    backgroundColor: "#4a312a",
+  },
+  goalChipHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 6,
+  },
+  goalDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  goalText: {
+    color: colors.text,
+    fontWeight: "600",
+    flex: 1,
+  },
+  goalMeta: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  loanChip: {
+    minWidth: "47%",
+    backgroundColor: "#412d28",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#5b433c",
+  },
+  activeLoanChip: {
+    borderColor: colors.gold,
+    backgroundColor: "#4a312a",
+  },
+  loanChipHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 6,
+  },
+  loanText: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+    marginBottom: 4,
+  },
+  loanMeta: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  labelChip: {
+    minWidth: "47%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#412d28",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  activeLabelChip: {
+    backgroundColor: "#4a312a",
+  },
+  labelDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 10,
+  },
+  labelText: {
+    color: colors.text,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  emptyBlock: {
+    backgroundColor: "#412d28",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#5b433c",
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    alignItems: "center",
+  },
+  emptyBlockText: {
+    color: colors.muted,
+    fontSize: 14,
+    fontWeight: "600",
   },
   categoryContent: {
     flexDirection: "row",

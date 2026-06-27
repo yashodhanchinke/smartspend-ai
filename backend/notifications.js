@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { supabaseAdmin } from "./supabase.js";
+import { MultinomialNaiveBayes } from "./ml/naiveBayes.js";
 
 const GENERATION_COOLDOWN_MS = 1000 * 60 * 60 * 6;
 
@@ -55,6 +56,12 @@ function getBudgetRange(period, referenceDate = new Date()) {
   if (period === "yearly") {
     const start = new Date(date.getFullYear(), 0, 1);
     return { start, end: new Date(date.getFullYear() + 1, 0, 1) };
+  }
+
+  if (period === "quarterly") {
+    const quarterStartMonth = Math.floor(date.getMonth() / 3) * 3;
+    const start = new Date(date.getFullYear(), quarterStartMonth, 1);
+    return { start, end: new Date(date.getFullYear(), quarterStartMonth + 3, 1) };
   }
 
   const start = new Date(date.getFullYear(), date.getMonth(), 1);
@@ -717,7 +724,7 @@ async function loadUserNotificationData(userId) {
       .from("transactions")
       .select("id,title,description,amount,type,date,category_id,categories(name)")
       .eq("user_id", userId)
-      .gte("date", formatDateKey(addDays(new Date(), -90)))
+      .gte("date", formatDateKey(addDays(new Date(), -400)))
       .order("date", { ascending: false }),
     supabaseAdmin
       .from("profiles")
@@ -1042,12 +1049,14 @@ export async function generateNotificationsForUser({ userId, force = false }) {
 }
 
 export async function analyzeSmsWithAi({ sender, message }) {
-  const model = getModel();
-  if (!model) {
-    return { isTransaction: false, bankName: null };
-  }
+  // Route classification through Multinomial Naive Bayes class facade
+  return await MultinomialNaiveBayes.classify(sender, message, async ({ sender, message }) => {
+    const model = getModel();
+    if (!model) {
+      return { isTransaction: false, bankName: null };
+    }
 
-  const prompt = `
+    const prompt = `
 Analyze this SMS message from an Indian bank/sender and extract transaction details.
 Sender: ${sender}
 Message: ${message}
@@ -1066,13 +1075,14 @@ Identify the bank name reliably from the sender ID (e.g. "HDFCBK" -> "HDFC Bank"
 If it is an OTP, PIN, or Alert NOT related to money movement, set isTransaction: false.
 `;
 
-  try {
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
-    const parsed = extractJsonArray(responseText);
-    return parsed;
-  } catch (error) {
-    console.error("Gemini SMS analysis failed:", error.message);
-    return { isTransaction: false, bankName: null };
-  }
+    try {
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text();
+      const parsed = extractJsonArray(responseText);
+      return parsed;
+    } catch (error) {
+      console.error("Gemini SMS analysis failed:", error.message);
+      return { isTransaction: false, bankName: null };
+    }
+  });
 }

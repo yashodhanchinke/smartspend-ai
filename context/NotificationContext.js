@@ -4,7 +4,7 @@ import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import { supabase } from "../lib/supabase";
-import { callBackendApi } from "../util/backendApi";
+import { callBackendApi, parseJsonResponse } from "../util/backendApi";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -118,13 +118,17 @@ export default function NotificationProvider({ children }) {
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
           schema: "public",
           table: "transactions",
           filter: `user_id=eq.${userId}`,
         },
-        () => {
-          generateNotifications({ force: true }).catch(() => {});
+        (payload) => {
+          const transactionType = payload?.new?.type || payload?.old?.type;
+
+          if (transactionType === "expense") {
+            generateNotifications({ force: true }).catch(() => {});
+          }
         }
       )
       .on(
@@ -171,14 +175,19 @@ export default function NotificationProvider({ children }) {
         return;
       }
 
-      const { response } = await callBackendApi("/api/notifications/generate", {
+      const path = "/api/notifications/generate";
+      const { response, base } = await callBackendApi(path, {
         accessToken: session.access_token,
         body: { force },
       });
 
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload?.error || "Could not generate notifications.");
+        try {
+          const payload = await parseJsonResponse({ response, base, path });
+          throw new Error(payload?.error || "Could not generate notifications.");
+        } catch (parseError) {
+          throw parseError;
+        }
       }
 
       await loadNotifications();
@@ -236,7 +245,8 @@ export default function NotificationProvider({ children }) {
         });
       }
 
-      const { response } = await callBackendApi("/api/notifications/register-device", {
+      const path = "/api/notifications/register-device";
+      const { response, base } = await callBackendApi(path, {
         accessToken: session.access_token,
         body: {
           expo_push_token: expoPushToken,
@@ -246,8 +256,12 @@ export default function NotificationProvider({ children }) {
       });
 
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(payload?.error || "Could not save notification preference.");
+        try {
+          const payload = await parseJsonResponse({ response, base, path });
+          throw new Error(payload?.error || "Could not save notification preference.");
+        } catch (parseError) {
+          throw parseError;
+        }
       }
     } catch (error) {
       console.warn("Push permission registration failed:", error?.message || error);
