@@ -22,6 +22,208 @@ function formatDateKey(date) {
   return new Date(date).toISOString().split('T')[0];
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatDateLabel(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '-';
+  }
+
+  return date.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function formatCurrencyValue(value) {
+  return `₹${Number(value || 0).toFixed(2)}`;
+}
+
+function getMonthDays(startDate, endDate) {
+  const days = [];
+  const current = new Date(`${startDate}T00:00:00.000Z`);
+  const end = new Date(`${endDate}T00:00:00.000Z`);
+
+  while (current < end) {
+    days.push(formatDateKey(current));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+
+  return days;
+}
+
+function buildDailySeries(transactions, startDate, endDate) {
+  const dayKeys = getMonthDays(startDate, endDate);
+  const dayMap = new Map(dayKeys.map((key) => [key, { date: key, income: 0, expense: 0, transfer: 0 }]));
+
+  (transactions || []).forEach((transaction) => {
+    const key = formatDateKey(transaction.date);
+    const bucket = dayMap.get(key);
+    if (!bucket) {
+      return;
+    }
+
+    const amount = Number(transaction.amount || 0);
+    if (transaction.type === 'income') {
+      bucket.income += amount;
+    } else if (transaction.type === 'expense') {
+      bucket.expense += amount;
+    } else if (transaction.type === 'transfer') {
+      bucket.transfer += amount;
+    }
+  });
+
+  return dayKeys.map((key) => dayMap.get(key));
+}
+
+function buildCategorySeries(expenseTransactions, limit = 6) {
+  const totals = new Map();
+
+  (expenseTransactions || []).forEach((transaction) => {
+    const name = transaction.categories?.name || 'Uncategorized';
+    totals.set(name, (totals.get(name) || 0) + Number(transaction.amount || 0));
+  });
+
+  return [...totals.entries()]
+    .map(([name, total]) => ({ name, total }))
+    .sort((left, right) => right.total - left.total)
+    .slice(0, limit);
+}
+
+function buildSavingsSuggestions({ totalIncome, totalSpending, categoryBreakdown, dailySeries, transactions }) {
+  const suggestions = [];
+  const savings = totalIncome - totalSpending;
+  const savingsRate = totalIncome > 0 ? savings / totalIncome : 0;
+  const topCategory = categoryBreakdown[0];
+  const topCategoryShare = totalSpending > 0 && topCategory ? topCategory.total / totalSpending : 0;
+  const recurringCount = (transactions || []).filter((item) => item.type === 'transfer').length;
+  const avgDailyExpense =
+    dailySeries.length > 0 ? dailySeries.reduce((sum, item) => sum + Number(item.expense || 0), 0) / dailySeries.length : 0;
+  const volatileDays = dailySeries.filter((item) => Number(item.expense || 0) > avgDailyExpense * 1.5 && Number(item.expense || 0) > 0).length;
+
+  if (totalIncome <= 0) {
+    suggestions.push('No income entries found for this period. Add income transactions to measure savings more accurately.');
+  } else if (savingsRate < 0.1) {
+    suggestions.push('Your savings rate is below 10%. Try setting a fixed transfer to savings right after salary day.');
+  } else if (savingsRate < 0.2) {
+    suggestions.push('Your savings rate is healthy but can improve. Aim to lock 20% before non-essential spending starts.');
+  } else {
+    suggestions.push('Your savings rate looks strong. Keep the same discipline and protect it from impulse categories.');
+  }
+
+  if (topCategory && topCategoryShare >= 0.35) {
+    suggestions.push(`The ${topCategory.name} category uses ${Math.round(topCategoryShare * 100)}% of total spending. Set a category cap and review it weekly.`);
+  }
+
+  if (volatileDays >= 3) {
+    suggestions.push('Spending is uneven across the month. A daily spending cap can help flatten the spikes.');
+  }
+
+  if (recurringCount >= 5) {
+    suggestions.push('You have many transfer entries this month. Review recurring items to make sure each one is still necessary.');
+  }
+
+  if (suggestions.length < 3) {
+    suggestions.push('Track at least one non-essential category each week and cut one recurring avoidable expense.');
+    suggestions.push('Before any purchase above your usual daily spend, pause for 10 minutes and compare it with your monthly goal.');
+  }
+
+  return suggestions.slice(0, 4);
+}
+
+function buildBarSvg({ bars, width = 720, height = 180, maxValue, leftLabel, rightLabel, seriesLabelA, seriesLabelB, colorA, colorB }) {
+  const padding = { top: 20, right: 20, bottom: 34, left: 44 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const actualMax = Math.max(maxValue || 0, 1);
+  const step = bars.length > 0 ? innerWidth / bars.length : innerWidth;
+  const barWidth = Math.max(3, Math.min(18, step * 0.36));
+  const gap = Math.max(2, step * 0.08);
+
+  const groupedBars = bars.map((bar, index) => {
+    const x = padding.left + index * step;
+    const expenseHeight = (Number(bar.expense || 0) / actualMax) * innerHeight;
+    const incomeHeight = (Number(bar.income || 0) / actualMax) * innerHeight;
+    const expenseY = padding.top + innerHeight - expenseHeight;
+    const incomeY = padding.top + innerHeight - incomeHeight;
+    const center = x + step / 2;
+
+    return `
+      <g>
+        <rect x="${center - barWidth - gap / 2}" y="${expenseY}" width="${barWidth}" height="${expenseHeight}" rx="4" fill="${colorA}" />
+        <rect x="${center + gap / 2}" y="${incomeY}" width="${barWidth}" height="${incomeHeight}" rx="4" fill="${colorB}" />
+        <text x="${center}" y="${padding.top + innerHeight + 16}" text-anchor="middle" font-size="9" fill="#7b6f69">${escapeHtml(bar.label)}</text>
+      </g>
+    `;
+  }).join('');
+
+  const gridLines = [0.25, 0.5, 0.75, 1]
+    .map((ratio) => {
+      const y = padding.top + innerHeight - innerHeight * ratio;
+      const value = Math.round(actualMax * ratio);
+      return `
+        <g>
+          <line x1="${padding.left}" y1="${y}" x2="${width - padding.right}" y2="${y}" stroke="#f0e6dd" stroke-width="1" />
+          <text x="10" y="${y + 3}" font-size="9" fill="#9d8d85">${value}</text>
+        </g>
+      `;
+    })
+    .join('');
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="${escapeHtml(seriesLabelA)} and ${escapeHtml(seriesLabelB)} chart">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="16" fill="#fffaf7" />
+      ${gridLines}
+      <line x1="${padding.left}" y1="${padding.top + innerHeight}" x2="${width - padding.right}" y2="${padding.top + innerHeight}" stroke="#d8cbc0" stroke-width="1.2" />
+      ${groupedBars}
+      <g>
+        <rect x="${padding.left}" y="4" width="12" height="12" rx="3" fill="${colorA}" />
+        <text x="${padding.left + 18}" y="14" font-size="11" fill="#4a3b35">${escapeHtml(seriesLabelA)}</text>
+        <rect x="${padding.left + 120}" y="4" width="12" height="12" rx="3" fill="${colorB}" />
+        <text x="${padding.left + 138}" y="14" font-size="11" fill="#4a3b35">${escapeHtml(seriesLabelB)}</text>
+      </g>
+      <text x="${width - padding.right}" y="14" text-anchor="end" font-size="11" fill="#8d7f76">${escapeHtml(rightLabel || '')}</text>
+      <text x="${padding.left}" y="14" font-size="11" fill="#8d7f76">${escapeHtml(leftLabel || '')}</text>
+    </svg>
+  `;
+}
+
+function buildCategoryBarSvg(categories, width = 720, height = 220) {
+  const padding = { top: 20, right: 20, bottom: 16, left: 150 };
+  const innerWidth = width - padding.left - padding.right;
+  const rowHeight = 28;
+  const maxValue = Math.max(...categories.map((item) => Number(item.total || 0)), 1);
+
+  const rows = categories.map((item, index) => {
+    const y = padding.top + index * rowHeight;
+    const barWidth = (Number(item.total || 0) / maxValue) * innerWidth;
+    return `
+      <g>
+        <text x="${padding.left - 12}" y="${y + 14}" text-anchor="end" font-size="11" fill="#4a3b35">${escapeHtml(item.name)}</text>
+        <rect x="${padding.left}" y="${y + 4}" width="${innerWidth}" height="14" rx="7" fill="#f1e7df" />
+        <rect x="${padding.left}" y="${y + 4}" width="${Math.max(8, barWidth)}" height="14" rx="7" fill="#f39b6d" />
+        <text x="${padding.left + Math.max(8, barWidth) + 8}" y="${y + 14}" font-size="10" fill="#8d7f76">${formatCurrencyValue(item.total)}</text>
+      </g>
+    `;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="Category breakdown chart">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="16" fill="#fffaf7" />
+      ${rows}
+    </svg>
+  `;
+}
+
 function getDateRangeForInputs({ month, rangeDays, customStartDate, customEndDate }) {
   if (customStartDate && customEndDate) {
     const parsedStart = new Date(customStartDate);
@@ -293,113 +495,198 @@ function buildHtmlContent({
   transferTransactions,
   aiData,
   categoryBreakdown,
+  dailySeries,
+  savingsSuggestions,
+  orderedTransactions,
   topExpenseTransactions,
   topIncomeTransactions,
   recentTransactions,
 }) {
+  const safeMonthLabel = escapeHtml(month ? month : `Last ${Math.max(1, Math.min(365, Number(rangeDays || 30)))} days`);
+  const incomeText = formatCurrencyValue(totalIncome);
+  const expenseText = formatCurrencyValue(totalSpending);
+  const netText = formatCurrencyValue(totalIncome - totalSpending);
+  const categoryChart = buildCategoryBarSvg(categoryBreakdown.slice(0, 6));
+  const trendChart = buildBarSvg({
+    bars: dailySeries.map((item) => ({
+      label: new Date(`${item.date}T00:00:00.000Z`).getDate(),
+      income: item.income,
+      expense: item.expense,
+    })),
+    maxValue: Math.max(
+      ...dailySeries.flatMap((item) => [Number(item.income || 0), Number(item.expense || 0)]),
+      0
+    ),
+    leftLabel: 'Month start',
+    rightLabel: 'Month end',
+    seriesLabelA: 'Expense',
+    seriesLabelB: 'Income',
+    colorA: '#f36f75',
+    colorB: '#63c98b',
+  });
+
   return `
   <html>
     <head>
       <style>
-        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #333; line-height: 1.6; max-width: 800px; margin: 0 auto; background: #fff; padding: 40px; }
-        .header { text-align: center; margin-bottom: 40px; border-bottom: 2px solid #eee; padding-bottom: 20px; }
-        h1 { color: #2c1e1a; margin-bottom: 5px; }
-        .subtitle { color: #777; font-size: 18px; }
-        .summary-card { background: #f9f9f9; padding: 25px; border-radius: 12px; margin-bottom: 30px; border-left: 4px solid #ffcc99; }
-        .metrics { display: flex; justify-content: space-between; margin-bottom: 30px; gap: 16px; }
-        .metric-box { background: #fff; border: 1px solid #eee; padding: 20px; border-radius: 8px; width: 45%; text-align: center; }
-        .metric-val { font-size: 28px; font-weight: bold; color: #d35400; margin: 10px 0 0 0; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #eee; }
-        th { background: #fdfdfd; font-weight: 600; color: #555; }
-        h2 { color: #2c1e1a; margin-top: 40px; font-size: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
-        ul { padding-left: 20px; }
-        li { margin-bottom: 10px; }
-        .footer { text-align: center; font-size: 12px; color: #aaa; margin-top: 50px; border-top: 1px solid #eee; padding-top: 20px; }
+        @page { size: A4; margin: 16mm; }
+        * { box-sizing: border-box; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #2f1f1a; line-height: 1.55; max-width: 920px; margin: 0 auto; background: #fffaf7; padding: 0; }
+        .shell { background: linear-gradient(180deg, #fffaf7 0%, #fff 24%, #fff 100%); padding: 28px; }
+        .header { background: linear-gradient(135deg, #2b1b17 0%, #4c2f25 55%, #7d4b39 100%); color: #fff; border-radius: 22px; padding: 28px; margin-bottom: 22px; box-shadow: 0 18px 36px rgba(43, 27, 23, 0.16); }
+        .header h1 { margin: 0; font-size: 30px; letter-spacing: 0.2px; }
+        .subtitle { color: rgba(255,255,255,0.84); font-size: 16px; margin-top: 8px; }
+        .section { margin-top: 24px; }
+        .section-title { color: #2c1e1a; margin: 0 0 12px; font-size: 20px; border-bottom: 1px solid #edded3; padding-bottom: 10px; }
+        .summary-card { background: #fff; padding: 20px; border-radius: 16px; margin-bottom: 18px; border: 1px solid #eadfd7; box-shadow: 0 8px 18px rgba(68, 40, 30, 0.04); }
+        .metrics { display: flex; justify-content: space-between; margin-bottom: 14px; gap: 16px; flex-wrap: wrap; }
+        .metric-box { background: #fff; border: 1px solid #eadfd7; padding: 18px; border-radius: 16px; width: calc(50% - 8px); text-align: center; box-shadow: 0 8px 18px rgba(68, 40, 30, 0.04); }
+        .metric-box.full { width: 100%; }
+        .metric-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; color: #8b7368; }
+        .metric-val { font-size: 28px; font-weight: 800; color: #d35400; margin: 8px 0 0 0; }
+        .metric-sub { color: #8f7d73; font-size: 12px; margin-top: 6px; }
+        .chart-card { background: #fff; border: 1px solid #eadfd7; border-radius: 18px; padding: 18px; box-shadow: 0 8px 18px rgba(68, 40, 30, 0.04); }
+        .chart-grid { display: grid; grid-template-columns: 1fr; gap: 18px; }
+        .insight-list { padding-left: 18px; margin: 10px 0 0; }
+        .insight-list li { margin-bottom: 10px; }
+        .suggestion-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .suggestion-box { background: linear-gradient(180deg, #fff 0%, #fff9f3 100%); border: 1px solid #efd9c8; border-radius: 16px; padding: 16px; }
+        .suggestion-badge { display: inline-block; background: #2c1e1a; color: #fff; border-radius: 999px; padding: 4px 10px; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 10px; }
+        .suggestion-box p { margin: 0; color: #4b3a34; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 10px; background: #fff; border-radius: 16px; overflow: hidden; }
+        th, td { text-align: left; padding: 12px; border-bottom: 1px solid #f0e6dd; vertical-align: top; }
+        th { background: #fbf5f0; font-weight: 700; color: #5c4a43; }
+        tbody tr:nth-child(even) { background: #fffaf7; }
+        .compact-note { color: #806f66; font-size: 12px; margin-top: 8px; }
+        .footer { text-align: center; font-size: 12px; color: #9d8f87; margin-top: 42px; border-top: 1px solid #edded3; padding-top: 18px; }
+        .page-break { break-before: page; page-break-before: always; }
       </style>
     </head>
     <body>
-      <div class="header">
-        <h1>SmartSpend Report</h1>
-        <div class="subtitle">${month ? month : `Last ${Math.max(1, Math.min(365, Number(rangeDays || 30)))} days`}</div>
-      </div>
-
-      <div class="metrics">
-        <div class="metric-box">
-          <div>Total Income</div>
-          <div class="metric-val">₹${totalIncome}</div>
+      <div class="shell">
+        <div class="header">
+          <h1>SmartSpend Report</h1>
+          <div class="subtitle">${safeMonthLabel}</div>
         </div>
-        <div class="metric-box">
-          <div>Total Expense</div>
-          <div class="metric-val">₹${totalSpending}</div>
+
+        <div class="metrics">
+          <div class="metric-box">
+            <div class="metric-label">Total Income</div>
+            <div class="metric-val">${incomeText}</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-label">Total Expense</div>
+            <div class="metric-val">${expenseText}</div>
+          </div>
         </div>
-      </div>
 
-      <div class="metrics">
-        <div class="metric-box">
-          <div>Net</div>
-          <div class="metric-val">₹${totalIncome - totalSpending}</div>
+        <div class="metrics">
+          <div class="metric-box">
+            <div class="metric-label">Net</div>
+            <div class="metric-val">${netText}</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-label">Highest Spending Category</div>
+            <div class="metric-val">${escapeHtml(highestCategory.name)}</div>
+          </div>
         </div>
-        <div class="metric-box">
-          <div>Highest Spending Category</div>
-          <div class="metric-val">${highestCategory.name}</div>
+
+        <div class="metrics">
+          <div class="metric-box">
+            <div class="metric-label">Transactions</div>
+            <div class="metric-val">${transactions.length}</div>
+          </div>
+          <div class="metric-box">
+            <div class="metric-label">Transfers</div>
+            <div class="metric-val">${transferTransactions.length}</div>
+          </div>
         </div>
-      </div>
 
-      <div class="metrics">
-        <div class="metric-box">
-          <div>Transactions</div>
-          <div class="metric-val">${transactions.length}</div>
+        <div class="section">
+          <h2 class="section-title">AI Insights</h2>
+          <div class="summary-card">${escapeHtml(aiData.summary)}</div>
         </div>
-        <div class="metric-box">
-          <div>Transfers</div>
-          <div class="metric-val">${transferTransactions.length}</div>
+
+        <div class="section">
+          <h2 class="section-title">Saving Suggestions</h2>
+          <div class="suggestion-grid">
+            ${savingsSuggestions
+              .map(
+                (tip, index) => `
+                  <div class="suggestion-box">
+                    <div class="suggestion-badge">Tip ${index + 1}</div>
+                    <p>${escapeHtml(tip)}</p>
+                  </div>
+                `
+              )
+              .join('')}
+          </div>
         </div>
-      </div>
 
-      <div class="summary-card">
-        <strong>AI Insights:</strong> ${aiData.summary}
-      </div>
+        <div class="section">
+          <h2 class="section-title">Monthly Trend Chart</h2>
+          <div class="chart-card">${trendChart}</div>
+          <div class="compact-note">Expense bars and income bars show the full month day by day.</div>
+        </div>
 
-      <h2>Actionable Advice</h2>
-      <ul>
-        ${aiData.tips.map((tip) => `<li>${tip}</li>`).join('')}
-      </ul>
+        <div class="section">
+          <h2 class="section-title">Category Breakdown</h2>
+          <div class="chart-card">${categoryChart}</div>
+        </div>
 
-      <h2>Category Breakdown</h2>
-      <table>
-        <thead><tr><th>Category</th><th>Amount</th></tr></thead>
-        <tbody>
-          ${categoryBreakdown.map((item) => `<tr><td>${item.name}</td><td>₹${item.total}</td></tr>`).join('')}
-        </tbody>
-      </table>
+        <div class="section">
+          <h2 class="section-title">Category Breakdown Table</h2>
+          <table>
+            <thead><tr><th>Category</th><th>Amount</th></tr></thead>
+            <tbody>
+              ${categoryBreakdown.map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${formatCurrencyValue(item.total)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
 
-      <h2>Top 5 Expenses</h2>
-      <table>
-        <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead>
-        <tbody>
-          ${topExpenseTransactions.map((item) => `<tr><td>${item.date}</td><td>${item.title}</td><td>${item.category}</td><td>${item.account}</td><td>₹${item.amount}</td></tr>`).join('')}
-        </tbody>
-      </table>
+        <div class="section">
+          <h2 class="section-title">Top 5 Expenses</h2>
+          <table>
+            <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead>
+            <tbody>
+              ${topExpenseTransactions.map((item) => `<tr><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.account)}</td><td>${formatCurrencyValue(item.amount)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
 
-      <h2>Top 5 Incomes</h2>
-      <table>
-        <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead>
-        <tbody>
-          ${topIncomeTransactions.map((item) => `<tr><td>${item.date}</td><td>${item.title}</td><td>${item.category}</td><td>${item.account}</td><td>₹${item.amount}</td></tr>`).join('')}
-        </tbody>
-      </table>
+        <div class="section">
+          <h2 class="section-title">Top 5 Incomes</h2>
+          <table>
+            <thead><tr><th>Date</th><th>Title</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead>
+            <tbody>
+              ${topIncomeTransactions.map((item) => `<tr><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.account)}</td><td>${formatCurrencyValue(item.amount)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
 
-      <h2>Recent 10 Transactions</h2>
-      <table>
-        <thead><tr><th>Date</th><th>Type</th><th>Title</th><th>Category</th><th>Account</th><th>To</th><th>Amount</th></tr></thead>
-        <tbody>
-          ${recentTransactions.map((item) => `<tr><td>${item.date}</td><td>${item.type}</td><td>${item.title}</td><td>${item.category}</td><td>${item.account}</td><td>${item.type === 'transfer' ? item.toAccount : '—'}</td><td>₹${item.amount}</td></tr>`).join('')}
-        </tbody>
-      </table>
+        <div class="section">
+          <h2 class="section-title">Recent 10 Transactions</h2>
+          <table>
+            <thead><tr><th>Date</th><th>Type</th><th>Title</th><th>Category</th><th>Account</th><th>To</th><th>Amount</th></tr></thead>
+            <tbody>
+              ${recentTransactions.map((item) => `<tr><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.category)}</td><td>${escapeHtml(item.account)}</td><td>${escapeHtml(item.type === 'transfer' ? item.toAccount : '—')}</td><td>${formatCurrencyValue(item.amount)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
 
-      <div class="footer">
-        Generated automatically by SmartSpend AI Backend.
+        <div class="page-break section">
+          <h2 class="section-title">All Month Transactions</h2>
+          <table>
+            <thead><tr><th>Date</th><th>Type</th><th>Title</th><th>Category</th><th>Account</th><th>To</th><th>Amount</th></tr></thead>
+            <tbody>
+              ${orderedTransactions.map((item) => `<tr><td>${escapeHtml(item.date)}</td><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.title || item.categories?.name || 'Transaction')}</td><td>${escapeHtml(item.categories?.name || (item.type === 'transfer' ? 'Transfer' : 'Uncategorized'))}</td><td>${escapeHtml(item.account?.name || '—')}</td><td>${escapeHtml(item.type === 'transfer' ? item.to_account?.name || '—' : '—')}</td><td>${formatCurrencyValue(item.amount)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="footer">
+          Generated automatically by SmartSpend AI Backend.
+        </div>
       </div>
     </body>
   </html>
@@ -432,27 +719,28 @@ export async function listStoredReports({
     throw new Error(`Could not load reports: ${error.message}`);
   }
 
-  const reports = [];
-  for (const item of data || []) {
-    let reportUrl = null;
-    try {
-      reportUrl = await createSignedReportUrl(item.storage_path);
-    } catch (signError) {
-      console.warn('Could not sign stored report:', signError.message);
-    }
+  const reports = await Promise.all(
+    (data || []).map(async (item) => {
+      let reportUrl = null;
+      try {
+        reportUrl = await createSignedReportUrl(item.storage_path);
+      } catch (signError) {
+        console.warn('Could not sign stored report:', signError.message);
+      }
 
-    reports.push({
-      id: item.id,
-      filename: item.filename,
-      label: item.report_label || item.filename,
-      created_at: item.created_at,
-      email_status: item.email_status,
-      is_automatic: item.is_automatic,
-      generated_for_month: item.generated_for_month,
-      report_url: reportUrl,
-      storage_path: item.storage_path,
-    });
-  }
+      return {
+        id: item.id,
+        filename: item.filename,
+        label: item.report_label || item.filename,
+        created_at: item.created_at,
+        email_status: item.email_status,
+        is_automatic: item.is_automatic,
+        generated_for_month: item.generated_for_month,
+        report_url: reportUrl,
+        storage_path: item.storage_path,
+      };
+    })
+  );
 
   return reports;
 }
@@ -564,9 +852,17 @@ export async function generateAndSendReport({
       }));
     }
 
-    const expenseTransactions = transactions.filter((item) => item.type === 'expense');
-    const incomeTransactions = transactions.filter((item) => item.type === 'income');
-    const transferTransactions = transactions.filter((item) => item.type === 'transfer');
+    const orderedTransactions = [...transactions].sort((left, right) => {
+      const dateDiff = new Date(right.date).getTime() - new Date(left.date).getTime();
+      if (dateDiff !== 0) {
+        return dateDiff;
+      }
+
+      return String(right.time || '').localeCompare(String(left.time || ''));
+    });
+    const expenseTransactions = orderedTransactions.filter((item) => item.type === 'expense');
+    const incomeTransactions = orderedTransactions.filter((item) => item.type === 'income');
+    const transferTransactions = orderedTransactions.filter((item) => item.type === 'transfer');
 
     let totalSpending = 0;
     let totalIncome = 0;
@@ -588,6 +884,14 @@ export async function generateAndSendReport({
       .sort((left, right) => right.total - left.total);
 
     const highestCategory = categoryBreakdown[0] || { name: 'None', total: 0 };
+    const dailySeries = buildDailySeries(orderedTransactions, startDate, endDate);
+    const savingsSuggestions = buildSavingsSuggestions({
+      totalIncome,
+      totalSpending,
+      categoryBreakdown,
+      dailySeries,
+      transactions: orderedTransactions,
+    });
 
     const topExpenseTransactions = [...expenseTransactions]
       .sort((left, right) => Number(right.amount || 0) - Number(left.amount || 0))
@@ -611,7 +915,7 @@ export async function generateAndSendReport({
         account: item.account?.name || '—',
       }));
 
-    const recentTransactions = [...transactions]
+    const recentTransactions = [...orderedTransactions]
       .slice(0, 10)
       .map((item) => ({
         type: item.type,
@@ -668,9 +972,12 @@ export async function generateAndSendReport({
       totalSpending,
       highestCategory,
       transactions,
+      dailySeries,
+      savingsSuggestions,
       transferTransactions,
       aiData,
       categoryBreakdown,
+      orderedTransactions,
       topExpenseTransactions,
       topIncomeTransactions,
       recentTransactions,

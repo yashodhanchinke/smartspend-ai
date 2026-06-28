@@ -447,7 +447,7 @@ export async function syncSmsTransactionsForUser(userId) {
     const targetAccount =
       findMatchingBankAccount(bankAccounts, matchedBankRule) || defaultBankAccount;
 
-    await saveTransaction({
+    const savedTransaction = await saveTransaction({
       userId,
       type: parsed.type,
       title: parsed.title,
@@ -476,7 +476,12 @@ export async function syncSmsTransactionsForUser(userId) {
 
     knownSmsKeys.add(key);
     rememberFingerprint(knownFingerprints, parsed);
-    processed += 1;
+
+    if (savedTransaction?.duplicate) {
+      skipped += 1;
+    } else {
+      processed += 1;
+    }
   }
 
   return { processed, skipped };
@@ -599,7 +604,7 @@ export async function ingestIncomingSmsForUser(userId, sms) {
   }
   // targetAccount is already resolved above via strict matching logic
 
-  await saveTransaction({
+  const savedTransaction = await saveTransaction({
     userId,
     type: aiParsed?.type || parsed.type,
     title: aiParsed?.merchant || parsed.title,
@@ -624,6 +629,10 @@ export async function ingestIncomingSmsForUser(userId, sms) {
 
   if (error) {
     throw error;
+  }
+
+  if (savedTransaction?.duplicate) {
+    return true;
   }
 
   // FORCE REFRESH: Send a broadcast event so the UI refreshes immediately

@@ -7,10 +7,12 @@ import Constants from "expo-constants";
 import * as WebBrowser from "expo-web-browser";
 import {
   Alert,
+  Animated,
   Dimensions,
   Modal,
   Platform,
   Pressable,
+  PanResponder,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,6 +32,9 @@ const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS;
 const CHART_HEIGHT = 210;
 const CHART_TOP_PADDING = 16;
 const CHART_BOTTOM_PADDING = 28;
+const CHART_TOOLTIP_WIDTH = 168;
+const CHART_TOOLTIP_HEIGHT = 96;
+const CHART_TOOLTIP_OFFSET = 14;
 
 function getApiBaseCandidates() {
   const candidates = [];
@@ -81,48 +86,9 @@ const RANGE_OPTIONS = [
   { key: "yearly", label: "Yearly" },
 ];
 const TYPE_OPTIONS = ["income", "expense"];
-const SECTION_CARDS = [
-  {
-    key: "yearly-summary",
-    title: "Yearly Summary",
-    description: "Comprehensive annual financial summary with monthly breakdowns",
-    icon: "trending-up",
-  },
-  {
-    key: "category-breakdown",
-    title: "Category Breakdown",
-    description: "Detailed spending analysis by category with visual charts",
-    icon: "chart-donut",
-  },
-  {
-    key: "budget-performance",
-    title: "Budget Performance",
-    description: "Track budget vs actual spending with performance indicators",
-    icon: "bullseye-arrow",
-  },
-  {
-    key: "cash-flow-analysis",
-    title: "Cash Flow Analysis",
-    description: "Money flow trends and patterns over time",
-    icon: "cash-multiple",
-  },
-  {
-    key: "goal-progress",
-    title: "Goal Progress",
-    description: "Financial goals tracking with milestone progress",
-    icon: "trophy-outline",
-  },
-];
 
 function formatCurrency(value) {
   return `₹${Number(value || 0).toFixed(2)}`;
-}
-
-function formatShortCurrency(value) {
-  const amount = Number(value || 0);
-  if (amount >= 100000) return `₹${(amount / 100000).toFixed(1)}L`;
-  if (amount >= 1000) return `₹${(amount / 1000).toFixed(1)}K`;
-  return `₹${Math.round(amount)}`;
 }
 
 function getNiceChartMax(value) {
@@ -157,8 +123,88 @@ function getChartTicks(maxValue, count = 5) {
   }
 
   const intervals = Math.max(count - 1, 1);
-  const step = safeMax / intervals;
-  return Array.from({ length: count }, (_, index) => step * index).reverse();
+  const roughStep = safeMax / intervals;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalized = roughStep / magnitude;
+
+  let niceStep = magnitude;
+
+  if (normalized > 1 && normalized <= 2) {
+    niceStep = 2 * magnitude;
+  } else if (normalized > 2 && normalized <= 5) {
+    niceStep = 5 * magnitude;
+  } else if (normalized > 5) {
+    niceStep = 10 * magnitude;
+  }
+
+  const maxTick = niceStep * intervals;
+  return Array.from({ length: count }, (_, index) => maxTick - niceStep * index);
+}
+
+function formatYAxisCurrency(value) {
+  const amount = Number(value || 0);
+  return `₹${amount.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getInteractiveChartState({ data, chartType, chartWidth, maxValue, slotWidth, touchX, touchY }) {
+  if (!data.length) {
+    return null;
+  }
+
+  const innerHeight = CHART_HEIGHT - CHART_TOP_PADDING - CHART_BOTTOM_PADDING;
+  const baselineY = CHART_TOP_PADDING + innerHeight;
+  const safeTouchX = clamp(touchX, 0, chartWidth);
+  const index = clamp(Math.round((safeTouchX - slotWidth / 2) / slotWidth), 0, data.length - 1);
+  const item = data[index];
+  const centerX = slotWidth * index + slotWidth / 2;
+  const barWidth = Math.max(8, Math.min(16, slotWidth * 0.24));
+
+  const incomeY = baselineY - (maxValue > 0 ? (item.income / maxValue) * innerHeight : 0);
+  const expenseY = baselineY - (maxValue > 0 ? (item.expense / maxValue) * innerHeight : 0);
+
+  const incomePoint =
+    chartType === "bar"
+      ? { x: centerX + 2 + barWidth / 2, y: incomeY }
+      : { x: centerX, y: incomeY };
+  const expensePoint =
+    chartType === "bar"
+      ? { x: centerX - barWidth / 2 - 2, y: expenseY }
+      : { x: centerX, y: expenseY };
+
+  const distanceToIncome = Math.hypot(safeTouchX - incomePoint.x, touchY - incomePoint.y);
+  const distanceToExpense = Math.hypot(safeTouchX - expensePoint.x, touchY - expensePoint.y);
+  const selectedSeries = distanceToIncome <= distanceToExpense ? "income" : "expense";
+  const activePoint = selectedSeries === "income" ? incomePoint : expensePoint;
+  const activeValue = selectedSeries === "income" ? item.income : item.expense;
+  const activeColor = selectedSeries === "income" ? "#7dd56c" : "#f46872";
+
+  const tooltipLeft = clamp(
+    centerX - CHART_TOOLTIP_WIDTH / 2,
+    8,
+    Math.max(chartWidth - CHART_TOOLTIP_WIDTH - 8, 8)
+  );
+  const preferredTop = activePoint.y - CHART_TOOLTIP_HEIGHT - CHART_TOOLTIP_OFFSET;
+  const tooltipTop =
+    preferredTop < 8
+      ? clamp(activePoint.y + CHART_TOOLTIP_OFFSET, 8, CHART_HEIGHT - CHART_TOOLTIP_HEIGHT - 8)
+      : clamp(preferredTop, 8, CHART_HEIGHT - CHART_TOOLTIP_HEIGHT - 8);
+
+  return {
+    activeColor,
+    activePoint,
+    activeSeries: selectedSeries,
+    activeValue,
+    centerX,
+    expensePoint,
+    incomePoint,
+    item,
+    tooltipLeft,
+    tooltipTop,
+  };
 }
 
 function parseStoredDate(value) {
@@ -406,6 +452,148 @@ function buildChartSeriesForRange(transactions, range, periodStart, periodEnd) {
   return months;
 }
 
+function isLastDayOfMonth(date) {
+  return date.getDate() === new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+}
+
+function isFullMonthSpan(periodStart, periodEnd) {
+  const start = new Date(periodStart);
+  const end = new Date(periodEnd);
+  return start.getDate() === 1 && isLastDayOfMonth(end) && start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth();
+}
+
+function isFullYearSpan(periodStart, periodEnd) {
+  const start = new Date(periodStart);
+  const end = new Date(periodEnd);
+  return start.getMonth() === 0 && start.getDate() === 1 && end.getMonth() === 11 && end.getDate() === 31 && start.getFullYear() === end.getFullYear();
+}
+
+function isFullWeekSpan(periodStart, periodEnd) {
+  const start = getStartOfWeek(periodStart);
+  const end = getEndOfWeek(periodStart);
+  return formatDateKey(start) === formatDateKey(periodStart) && formatDateKey(end) === formatDateKey(periodEnd);
+}
+
+function getChartLabelDate(periodStart, periodEnd, index, binCount, range) {
+  if (binCount <= 1) {
+    return new Date(periodStart);
+  }
+
+  const start = new Date(periodStart);
+  const end = new Date(periodEnd);
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+
+  if (range === "daily") {
+    end.setHours(24, 0, 0, 0);
+  } else {
+    end.setHours(23, 59, 59, 999);
+  }
+
+  const ratio = index / (binCount - 1);
+  return new Date(start.getTime() + (end.getTime() - start.getTime()) * ratio);
+}
+
+function formatChartAxisLabel({ range, periodStart, periodEnd, index, binCount }) {
+  const labelDate = getChartLabelDate(periodStart, periodEnd, index, binCount, range);
+  const isFirst = index === 0;
+  const isLast = index === binCount - 1;
+  const fullWeek = isFullWeekSpan(periodStart, periodEnd);
+  const fullMonth = isFullMonthSpan(periodStart, periodEnd);
+  const fullYear = isFullYearSpan(periodStart, periodEnd);
+
+  if (range === "daily") {
+    if (isFirst) return "00:00";
+    if (isLast) return "24:00";
+    return `${String(labelDate.getHours()).padStart(2, "0")}:00`;
+  }
+
+  if (range === "weekly") {
+    if (isFirst) return fullWeek ? formatDateLabel(new Date(periodStart)) : formatDateLabel(labelDate);
+    if (isLast) return fullWeek ? formatDateLabel(new Date(periodEnd)) : formatDateLabel(labelDate);
+    return labelDate.toLocaleDateString("en-US", { weekday: "short", day: "numeric" });
+  }
+
+  if (range === "monthly") {
+    if (isFirst) return fullMonth ? "1" : formatDateLabel(labelDate);
+    if (isLast) return fullMonth ? String(new Date(periodEnd).getDate()) : formatDateLabel(labelDate);
+    return String(labelDate.getDate());
+  }
+
+  if (range === "yearly") {
+    if (isFirst) return fullYear ? "Jan" : formatDateLabel(labelDate);
+    if (isLast) return fullYear ? "Dec" : formatDateLabel(labelDate);
+    return labelDate.toLocaleDateString("en-US", { month: "short" });
+  }
+
+  if (isFirst || isLast) {
+    return formatDateLabel(labelDate);
+  }
+
+  return labelDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function buildAdaptiveChartSeries(series, range, periodStart, periodEnd, targetPoints = 5) {
+  const safeSeries = Array.isArray(series) ? series : [];
+  if (safeSeries.length <= targetPoints) {
+    return safeSeries.map((item, index) => {
+      return {
+        ...item,
+        axisLabel: formatChartAxisLabel({
+          range,
+          periodStart,
+          periodEnd,
+          index,
+          binCount: safeSeries.length,
+        }),
+      };
+    });
+  }
+
+  const binCount = Math.min(targetPoints, safeSeries.length);
+  const baseSize = Math.floor(safeSeries.length / binCount);
+  const remainder = safeSeries.length % binCount;
+  const bins = [];
+  let cursor = 0;
+
+  for (let binIndex = 0; binIndex < binCount; binIndex += 1) {
+    const binSize = baseSize + (binIndex < remainder ? 1 : 0);
+    const chunk = safeSeries.slice(cursor, cursor + binSize);
+    cursor += binSize;
+
+    if (!chunk.length) {
+      continue;
+    }
+
+    const startItem = chunk[0];
+    const endItem = chunk[chunk.length - 1];
+    const income = chunk.reduce((sum, item) => sum + Number(item.income || 0), 0);
+    const expense = chunk.reduce((sum, item) => sum + Number(item.expense || 0), 0);
+    const label = startItem.shortLabel || startItem.label || startItem.key;
+
+    bins.push({
+      key: `${startItem.key}-${endItem.key}`,
+      label,
+      shortLabel: label,
+      income,
+      expense,
+      sourceRange: {
+        start: startItem.label || startItem.shortLabel || startItem.key,
+        end: endItem.label || endItem.shortLabel || endItem.key,
+      },
+      axisLabel: formatChartAxisLabel({
+        range,
+        periodStart,
+        periodEnd,
+        index: binIndex,
+        binCount,
+      }),
+    });
+  }
+
+  return bins;
+}
+
 function buildCategoryBreakdown(transactions, type) {
   const bucket = {};
 
@@ -625,7 +813,7 @@ function createSmoothLinePath(points) {
   return path;
 }
 
-function BarChart({ data, chartWidth, maxValue, slotWidth }) {
+function BarChart({ data, chartWidth, maxValue, slotWidth, interaction }) {
   const innerHeight = CHART_HEIGHT - CHART_TOP_PADDING - CHART_BOTTOM_PADDING;
   const barWidth = Math.max(8, Math.min(16, slotWidth * 0.24));
 
@@ -662,11 +850,41 @@ function BarChart({ data, chartWidth, maxValue, slotWidth }) {
           </G>
         );
       })}
+
+      {interaction ? (
+        <>
+          <Line
+            x1={interaction.centerX}
+            y1={CHART_TOP_PADDING}
+            x2={interaction.centerX}
+            y2={CHART_TOP_PADDING + innerHeight}
+            stroke={interaction.activeColor}
+            strokeOpacity="0.28"
+            strokeWidth="2"
+            strokeDasharray="5 6"
+          />
+          <Circle
+            cx={interaction.activePoint.x}
+            cy={interaction.activePoint.y}
+            r="8"
+            fill={interaction.activeColor}
+            fillOpacity="0.16"
+          />
+          <Circle
+            cx={interaction.activePoint.x}
+            cy={interaction.activePoint.y}
+            r="4"
+            fill="#f7eee8"
+            stroke={interaction.activeColor}
+            strokeWidth="2"
+          />
+        </>
+      ) : null}
     </Svg>
   );
 }
 
-function LineChart({ data, chartWidth, maxValue, slotWidth }) {
+function LineChart({ data, chartWidth, maxValue, slotWidth, interaction }) {
   const innerHeight = CHART_HEIGHT - CHART_TOP_PADDING - CHART_BOTTOM_PADDING;
   const baselineY = CHART_TOP_PADDING + innerHeight;
   const incomePlotPoints = data.map((item, index) => ({
@@ -730,6 +948,36 @@ function LineChart({ data, chartWidth, maxValue, slotWidth }) {
 
             return <Circle key={`${item.key}-expense`} cx={point.x} cy={point.y} r="3" fill="#f46872" />;
           })}
+        </>
+      ) : null}
+
+      {interaction ? (
+        <>
+          <Line
+            x1={interaction.centerX}
+            y1={CHART_TOP_PADDING}
+            x2={interaction.centerX}
+            y2={baselineY}
+            stroke={interaction.activeColor}
+            strokeOpacity="0.28"
+            strokeWidth="2"
+            strokeDasharray="5 6"
+          />
+          <Circle
+            cx={interaction.activePoint.x}
+            cy={interaction.activePoint.y}
+            r="9"
+            fill={interaction.activeColor}
+            fillOpacity="0.16"
+          />
+          <Circle
+            cx={interaction.activePoint.x}
+            cy={interaction.activePoint.y}
+            r="4"
+            fill="#f7eee8"
+            stroke={interaction.activeColor}
+            strokeWidth="2"
+          />
         </>
       ) : null}
     </Svg>
@@ -922,21 +1170,6 @@ function DonutChart({ items, total, selectedType }) {
   );
 }
 
-function ReportFeatureCard({ item }) {
-  return (
-    <Pressable style={styles.featureCard}>
-      <View style={styles.featureIconWrap}>
-        <MaterialCommunityIcons name={item.icon} size={22} color="#f7b8a4" />
-      </View>
-      <View style={styles.featureCopy}>
-        <Text style={styles.featureTitle}>{item.title}</Text>
-        <Text style={styles.featureDescription}>{item.description}</Text>
-      </View>
-      <Feather name="chevron-right" size={20} color="#8f756b" />
-    </Pressable>
-  );
-}
-
 function FilterSheet({
   visible,
   draftAccountIds,
@@ -1061,6 +1294,7 @@ export default function ReportsScreen() {
   const [accounts, setAccounts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [chartType, setChartType] = useState("bar");
+  const [chartInteraction, setChartInteraction] = useState(null);
   const [selectedType, setSelectedType] = useState("expense");
   const [filterVisible, setFilterVisible] = useState(false);
   const [pickerField, setPickerField] = useState(null);
@@ -1083,6 +1317,9 @@ export default function ReportsScreen() {
   const [generatedReports, setGeneratedReports] = useState([]);
   const [profileEmail, setProfileEmail] = useState("");
   const workingApiBaseRef = useRef(null);
+  const chartTooltipOpacity = useRef(new Animated.Value(0)).current;
+  const chartTooltipScale = useRef(new Animated.Value(0.96)).current;
+  const chartTooltipTranslate = useRef(new Animated.ValueXY({ x: 0, y: 8 })).current;
 
   const callBackendApi = useCallback(
     async (path, init) => {
@@ -1188,21 +1425,23 @@ export default function ReportsScreen() {
             try {
               let targetUrl = reportItem?.url || null;
 
-              if (reportItem?.storagePath) {
-                const { data: signedData, error: signedError } = await supabase.storage
-                  .from("reports")
-                  .createSignedUrl(reportItem.storagePath, 60 * 60 * 24);
+              if (!targetUrl && reportItem?.storagePath) {
+                try {
+                  const { data: signedData, error: signedError } = await supabase.storage
+                    .from("reports")
+                    .createSignedUrl(reportItem.storagePath, 60 * 60 * 24);
 
-                if (signedError) throw signedError;
-                targetUrl = signedData?.signedUrl || targetUrl;
-
-                if (targetUrl) {
-                  setGeneratedReports((current) =>
-                    current.map((item) =>
-                      item.id === reportItem.id ? { ...item, url: targetUrl } : item
-                    )
-                  );
+                  if (signedError) throw signedError;
+                  targetUrl = signedData?.signedUrl || null;
+                } catch (signError) {
+                  console.warn("Could not refresh report link:", signError?.message || signError);
                 }
+              }
+
+              if (targetUrl && reportItem?.id) {
+                setGeneratedReports((current) =>
+                  current.map((item) => (item.id === reportItem.id ? { ...item, url: targetUrl } : item))
+                );
               }
 
               if (!targetUrl) {
@@ -1323,12 +1562,13 @@ export default function ReportsScreen() {
       const reportUrl = json?.report_url || null;
       const filename = json?.filename || null;
       const reportId = json?.report_id || null;
-      setLastReportUrl(reportUrl);
 
       if (reportUrl) {
         const absoluteUrl = reportUrl.startsWith("http")
           ? reportUrl
           : `${API_URL}${reportUrl.startsWith("/") ? "" : "/"}${reportUrl}`;
+
+        setLastReportUrl(absoluteUrl);
 
         setGeneratedReports((current) => [
           {
@@ -1657,6 +1897,17 @@ export default function ReportsScreen() {
       ),
     [appliedRange, periodTransactions, selectedPeriodBounds.end, selectedPeriodBounds.start]
   );
+  const chartSeries = useMemo(
+    () =>
+      buildAdaptiveChartSeries(
+        groupedSeries,
+        appliedRange,
+        selectedPeriodBounds.start,
+        selectedPeriodBounds.end,
+        5
+      ),
+    [appliedRange, groupedSeries, selectedPeriodBounds.end, selectedPeriodBounds.start]
+  );
 
   const breakdownItems = useMemo(
     () => buildCategoryBreakdown(periodTransactions, selectedType),
@@ -1665,11 +1916,114 @@ export default function ReportsScreen() {
   const chartBreakdownItems = breakdownItems;
 
   const selectedTypeTotal = breakdownItems.reduce((sum, item) => sum + item.total, 0);
-  const rawMaxChartValue = Math.max(...groupedSeries.flatMap((item) => [item.income, item.expense]), 0);
+  const rawMaxChartValue = Math.max(...chartSeries.flatMap((item) => [item.income, item.expense]), 0);
   const maxChartValue = getNiceChartMax(rawMaxChartValue);
   const chartTicks = getChartTicks(maxChartValue);
-  const chartSlotWidth = appliedRange === "daily" ? 74 : appliedRange === "monthly" ? 26 : appliedRange === "yearly" ? 38 : 42;
-  const chartWidth = Math.max(CARD_WIDTH - 36, groupedSeries.length * chartSlotWidth);
+  const chartWidth = Math.max(CARD_WIDTH - 52, 260);
+  const chartSlotWidth = chartWidth / Math.max(chartSeries.length, 1);
+
+  useEffect(() => {
+    setChartInteraction(null);
+  }, [appliedRange, chartType, selectedPeriodKey, selectedPeriodBounds.end, selectedPeriodBounds.start]);
+
+  const showChartInteraction = useCallback(
+    (touchX, touchY) => {
+      const nextInteraction = getInteractiveChartState({
+        data: chartSeries,
+        chartType,
+        chartWidth,
+        maxValue: maxChartValue,
+        slotWidth: chartSlotWidth,
+        touchX,
+        touchY,
+      });
+
+      if (!nextInteraction) {
+        return;
+      }
+
+      setChartInteraction((current) => {
+        if (!current) {
+          chartTooltipOpacity.stopAnimation();
+          chartTooltipScale.stopAnimation();
+          chartTooltipOpacity.setValue(0);
+          chartTooltipScale.setValue(0.96);
+          Animated.parallel([
+            Animated.spring(chartTooltipOpacity, {
+              toValue: 1,
+              useNativeDriver: true,
+              tension: 180,
+              friction: 16,
+            }),
+            Animated.spring(chartTooltipScale, {
+              toValue: 1,
+              useNativeDriver: true,
+              tension: 180,
+              friction: 16,
+            }),
+          ]).start();
+        }
+
+        chartTooltipTranslate.setValue({
+          x: nextInteraction.tooltipLeft,
+          y: nextInteraction.tooltipTop,
+        });
+
+        return nextInteraction;
+      });
+    },
+    [
+      chartSlotWidth,
+      chartTooltipOpacity,
+      chartTooltipScale,
+      chartTooltipTranslate,
+      chartType,
+      chartWidth,
+      chartSeries,
+      maxChartValue,
+    ]
+  );
+
+  const clearChartInteraction = useCallback(() => {
+    setChartInteraction((current) => {
+      if (current) {
+        chartTooltipOpacity.stopAnimation();
+        chartTooltipScale.stopAnimation();
+        Animated.parallel([
+          Animated.timing(chartTooltipOpacity, {
+            toValue: 0,
+            duration: 120,
+            useNativeDriver: true,
+          }),
+          Animated.timing(chartTooltipScale, {
+            toValue: 0.96,
+            duration: 120,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
+
+      return null;
+    });
+  }, [chartTooltipOpacity, chartTooltipScale]);
+
+  const chartPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (evt) => {
+          showChartInteraction(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+        },
+        onPanResponderMove: (evt) => {
+          showChartInteraction(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+        },
+        onPanResponderRelease: clearChartInteraction,
+        onPanResponderTerminate: clearChartInteraction,
+      }),
+    [clearChartInteraction, showChartInteraction]
+  );
+
   const openCategoryDetails = useCallback(
     (item) => {
       if (!item?.categoryId || !item?.category) {
@@ -1801,37 +2155,80 @@ export default function ReportsScreen() {
             </View>
           ) : (
             <>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chartScroll}>
+              <ScrollView
+                horizontal
+                scrollEnabled={false}
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.chartScroll}
+              >
                 <View>
                   <View style={styles.chartYAxis}>
                     {chartTicks.map((value, index) => (
                       <Text key={`${value}-${index}`} style={styles.axisText}>
-                        {formatShortCurrency(value)}
+                        {formatYAxisCurrency(value)}
                       </Text>
                     ))}
                   </View>
                   <View style={styles.chartSvgWrap}>
-                    {chartType === "bar" ? (
-                      <BarChart
-                        data={groupedSeries}
-                        chartWidth={chartWidth}
-                        maxValue={maxChartValue}
-                        slotWidth={chartSlotWidth}
-                      />
-                    ) : (
-                      <LineChart
-                        data={groupedSeries}
-                        chartWidth={chartWidth}
-                        maxValue={maxChartValue}
-                        slotWidth={chartSlotWidth}
-                      />
-                    )}
+                    <View style={{ width: chartWidth, height: CHART_HEIGHT }}>
+                      {chartType === "bar" ? (
+                        <BarChart
+                          data={chartSeries}
+                          chartWidth={chartWidth}
+                          maxValue={maxChartValue}
+                          slotWidth={chartSlotWidth}
+                          interaction={chartInteraction}
+                        />
+                      ) : (
+                        <LineChart
+                          data={chartSeries}
+                          chartWidth={chartWidth}
+                          maxValue={maxChartValue}
+                          slotWidth={chartSlotWidth}
+                          interaction={chartInteraction}
+                        />
+                      )}
+
+                      <View style={styles.chartGestureLayer} {...chartPanResponder.panHandlers} />
+
+                      {chartInteraction ? (
+                        <Animated.View
+                          pointerEvents="none"
+                          style={[
+                            styles.chartTooltip,
+                            {
+                              opacity: chartTooltipOpacity,
+                              transform: [
+                                { translateX: chartTooltipTranslate.x },
+                                { translateY: chartTooltipTranslate.y },
+                                { scale: chartTooltipScale },
+                              ],
+                            },
+                          ]}
+                        >
+                          <Text style={styles.chartTooltipLabel}>
+                            {chartInteraction.item.label || chartInteraction.item.shortLabel || chartInteraction.item.key}
+                          </Text>
+                          <View style={styles.chartTooltipRow}>
+                            <View style={[styles.chartTooltipSwatch, { backgroundColor: "#7dd56c" }]} />
+                            <Text style={styles.chartTooltipText}>Income {formatCurrency(chartInteraction.item.income)}</Text>
+                          </View>
+                          <View style={styles.chartTooltipRow}>
+                            <View style={[styles.chartTooltipSwatch, { backgroundColor: "#f46872" }]} />
+                            <Text style={styles.chartTooltipText}>Expense {formatCurrency(chartInteraction.item.expense)}</Text>
+                          </View>
+                          <Text style={[styles.chartTooltipActive, { color: chartInteraction.activeColor }]}>
+                            Selected {chartInteraction.activeSeries}
+                          </Text>
+                        </Animated.View>
+                      ) : null}
+                    </View>
                   </View>
 
                   <View style={[styles.chartLabelsRow, { width: chartWidth }]}>
-                    {groupedSeries.map((item) => (
+                    {chartSeries.map((item) => (
                       <Text key={item.key} style={[styles.chartLabel, { width: chartSlotWidth }]}>
-                        {item.label}
+                        {item.axisLabel || item.label}
                       </Text>
                     ))}
                   </View>
@@ -1905,11 +2302,6 @@ export default function ReportsScreen() {
             </Pressable>
           ))}
         </View>
-
-        <Text style={styles.financialReportsTitle}>Financial Reports</Text>
-        {SECTION_CARDS.map((item) => (
-          <ReportFeatureCard key={item.key} item={item} />
-        ))}
 
         <View style={styles.reportActionsBottom}>
           <View style={styles.reportActionsRow}>
@@ -2162,6 +2554,7 @@ const styles = StyleSheet.create({
   },
   chartSvgWrap: {
     marginLeft: 52,
+    position: "relative",
   },
   axisText: {
     color: "#9c857b",
@@ -2179,6 +2572,55 @@ const styles = StyleSheet.create({
     color: "#bda79c",
     fontSize: 10,
     textAlign: "center",
+  },
+  chartGestureLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 6,
+  },
+  chartTooltip: {
+    position: "absolute",
+    width: CHART_TOOLTIP_WIDTH,
+    minHeight: CHART_TOOLTIP_HEIGHT,
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: "rgba(29, 18, 13, 0.94)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 194, 171, 0.22)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+    elevation: 6,
+    zIndex: 8,
+  },
+  chartTooltipLabel: {
+    color: "#f7eee8",
+    fontSize: 12,
+    fontWeight: "800",
+    marginBottom: 8,
+  },
+  chartTooltipRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 6,
+  },
+  chartTooltipSwatch: {
+    width: 10,
+    height: 10,
+    borderRadius: 99,
+  },
+  chartTooltipText: {
+    color: "#d9c6bd",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  chartTooltipActive: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "capitalize",
   },
   emptyChart: {
     alignItems: "center",
@@ -2338,46 +2780,6 @@ const styles = StyleSheet.create({
     color: "#f7d8ca",
     fontSize: 15,
     fontWeight: "800",
-  },
-  financialReportsTitle: {
-    color: "#f3dfd6",
-    fontSize: 22,
-    fontWeight: "800",
-    marginBottom: 14,
-  },
-  featureCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#251612",
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "#3f2a24",
-    padding: 16,
-    marginBottom: 12,
-  },
-  featureIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
-    backgroundColor: "#3a211a",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 14,
-  },
-  featureCopy: {
-    flex: 1,
-    marginRight: 12,
-  },
-  featureTitle: {
-    color: "#f4e2d9",
-    fontSize: 18,
-    fontWeight: "800",
-  },
-  featureDescription: {
-    color: "#beaaa1",
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 4,
   },
   floatingFilter: {
     position: "absolute",

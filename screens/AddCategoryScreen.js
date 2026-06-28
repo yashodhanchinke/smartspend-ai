@@ -40,6 +40,12 @@ export default function AddCategoryScreen({ navigation, route }) {
     setSelectedColor(category.color || "#FF4444");
   }, [category]);
 
+  const normalizeCategoryName = (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+
   const handleSave = async () => {
     if (!name.trim()) {
       Alert.alert("Please enter category name");
@@ -57,6 +63,31 @@ export default function AddCategoryScreen({ navigation, route }) {
       icon: category?.icon || "tag",
       color: selectedColor,
     };
+
+    const { data: existingCategories, error: fetchError } = await supabase
+      .from("categories")
+      .select("id,name,type")
+      .eq("user_id", user.id)
+      .eq("type", type);
+
+    if (fetchError) {
+      Alert.alert(fetchError.message);
+      return;
+    }
+
+    const nextName = normalizeCategoryName(name);
+    const duplicateCategory = (existingCategories || []).find((item) => {
+      if (item.id === category?.id) {
+        return false;
+      }
+
+      return normalizeCategoryName(item.name) === nextName;
+    });
+
+    if (duplicateCategory) {
+      Alert.alert("Category already exists", "Please choose a different category name.");
+      return;
+    }
 
     const { error } = isEditMode
       ? await supabase.from("categories").update(payload).eq("id", category.id).eq("user_id", user.id)

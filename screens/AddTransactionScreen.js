@@ -2,7 +2,7 @@
 
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   ScrollView,
@@ -17,6 +17,32 @@ import ScreenHeader from "../components/ScreenHeader";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 import { saveTransaction, updateTransaction } from "../util/saveTransaction";
+
+function formatLocalDate(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isPastDateTime(value) {
+  return value instanceof Date && value.getTime() <= Date.now();
+}
+
+function getSignedGoalAmount(transaction) {
+  const amount = Number(transaction?.amount || 0);
+
+  if (transaction?.type === "expense") {
+    return -amount;
+  }
+
+  if (transaction?.type === "income") {
+    return amount;
+  }
+
+  return 0;
+}
 
 export default function AddTransactionScreen({ navigation, route }) {
   const transaction = route?.params?.transaction || null;
@@ -34,6 +60,7 @@ export default function AddTransactionScreen({ navigation, route }) {
   const [categories, setCategories] = useState([]);
   const [labels, setLabels] = useState([]);
   const [goals, setGoals] = useState([]);
+  const [goalTransactions, setGoalTransactions] = useState([]);
   const [loans, setLoans] = useState([]);
   const [selectedLabels, setSelectedLabels] = useState([]);
 
@@ -48,6 +75,7 @@ export default function AddTransactionScreen({ navigation, route }) {
   const [showTime, setShowTime] = useState(false);
 
   const [loading, setLoading] = useState(false);
+  const submitLockRef = useRef(false);
 
   useEffect(() => {
     if (!transaction) {
@@ -159,13 +187,30 @@ export default function AddTransactionScreen({ navigation, route }) {
       return;
     }
 
-    const { data } = await supabase
-      .from("goals")
-      .select("id,title,target_amount,current_amount,start_date,end_date,color")
-      .eq("user_id", user.id)
-      .order("end_date", { ascending: true });
+    const [{ data: goalRows, error: goalError }, { data: goalTxRows, error: goalTxError }] =
+      await Promise.all([
+        supabase
+          .from("goals")
+          .select("id,title,target_amount,current_amount,start_date,end_date,color")
+          .eq("user_id", user.id)
+          .order("end_date", { ascending: true }),
+        supabase
+          .from("transactions")
+          .select("id,amount,type,goal_id")
+          .eq("user_id", user.id)
+          .not("goal_id", "is", null),
+      ]);
 
-    setGoals(data || []);
+    if (goalError) {
+      throw goalError;
+    }
+
+    if (goalTxError) {
+      throw goalTxError;
+    }
+
+    setGoals(goalRows || []);
+    setGoalTransactions(goalTxRows || []);
   }, []);
 
   const fetchLoans = useCallback(async () => {
@@ -184,7 +229,7 @@ export default function AddTransactionScreen({ navigation, route }) {
       .eq("user_id", user.id)
       .order("end_date", { ascending: false });
 
-    setLoans(data || []);
+    setLoans((data || []).filter((loan) => String(loan.status || "").toLowerCase() !== "settled"));
   }, []);
 
   const fetchTransactionLabels = useCallback(async () => {
@@ -314,6 +359,23 @@ export default function AddTransactionScreen({ navigation, route }) {
     fetchTransactionLoan();
   }, [fetchTransactionLoan]);
 
+  const goalProgressMap = useMemo(() => {
+    const map = new Map();
+
+    (goalTransactions || []).forEach((transaction) => {
+      if (!transaction.goal_id) {
+        return;
+      }
+
+      map.set(
+        transaction.goal_id,
+        (map.get(transaction.goal_id) || 0) + getSignedGoalAmount(transaction)
+      );
+    });
+
+    return map;
+  }, [goalTransactions]);
+
   useEffect(() => {
     if (type === "transfer") {
       setSelectedLoan(null);
@@ -387,6 +449,9 @@ export default function AddTransactionScreen({ navigation, route }) {
   /* ================= SAVE ================= */
 
   const handleSave = async () => {
+    if (loading || submitLockRef.current) {
+      return;
+    }
 
     if (!amount || !selectedAccount) {
       Alert.alert("Error", "Select account & enter amount");
@@ -403,59 +468,80 @@ export default function AddTransactionScreen({ navigation, route }) {
       return;
     }
 
-    setLoading(true);
+    const submitTransaction = async () => {
+      submitLockRef.current = true;
+      setLoading(true);
 
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+      try {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
 
-    try {
-    const payload = {
-        userId: user.id,
-        type,
-        title,
-        amount,
-        description,
-        date: date.toISOString().split("T")[0],
-        time: date.toTimeString().split(" ")[0],
-        accountId: selectedAccount.id,
-        categoryId: type === "transfer" ? null : selectedCategory?.id || null,
-        toAccountId: type === "transfer" ? transferAccount.id : null,
-        labelIds: type === "transfer" ? [] : selectedLabels.map((label) => label.id),
-        goalId: type === "transfer" ? null : selectedGoal?.id || null,
-        loanId: type === "transfer" ? null : selectedLoan?.id || null,
-      };
+        const payload = {
+          userId: user.id,
+          type,
+          title,
+          amount,
+          description,
+          date: formatLocalDate(date),
+          time: date.toTimeString().split(" ")[0],
+          accountId: selectedAccount.id,
+          categoryId: type === "transfer" ? null : selectedCategory?.id || null,
+          toAccountId: type === "transfer" ? transferAccount.id : null,
+          labelIds: type === "transfer" ? [] : selectedLabels.map((label) => label.id),
+          goalId: type === "transfer" ? null : selectedGoal?.id || null,
+          loanId: type === "transfer" ? null : selectedLoan?.id || null,
+        };
 
-      if (isEditMode) {
-        await updateTransaction({
-          transactionId: transaction.id,
-          ...payload,
-        });
-      } else {
-        await saveTransaction(payload);
+        if (isEditMode) {
+          await updateTransaction({
+            transactionId: transaction.id,
+            ...payload,
+          });
+        } else {
+          const savedTransaction = await saveTransaction(payload);
+          if (savedTransaction?.duplicate) {
+            Alert.alert("Already saved", "An identical transaction already exists.");
+            return;
+          }
+        }
+      } catch (error) {
+        Alert.alert("Error", error.message);
+        return;
+      } finally {
+        setLoading(false);
+        submitLockRef.current = false;
       }
-    } catch (error) {
-      Alert.alert("Error", error.message);
-      setLoading(false);
+
+      Alert.alert("Success", isEditMode ? "Transaction updated" : "Transaction added");
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return;
+      }
+
+      // Fallback: if this screen was opened without a back stack (e.g. deep link / refresh),
+      // send the user to a safe place.
+      if (returnTab) {
+        navigation.navigate("Main", { screen: returnTab });
+        return;
+      }
+
+      navigation.navigate("Main", { screen: "Home" });
+    };
+
+    if (isPastDateTime(date)) {
+      Alert.alert(
+        "Use past date and time?",
+        `You selected ${date.toLocaleDateString()} at ${date.toLocaleTimeString()}. Do you want to add this transaction for that past time?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Add Anyway", onPress: submitTransaction },
+        ]
+      );
       return;
     }
 
-    setLoading(false);
-
-    Alert.alert("Success", isEditMode ? "Transaction updated" : "Transaction added");
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-
-    // Fallback: if this screen was opened without a back stack (e.g. deep link / refresh),
-    // send the user to a safe place.
-    if (returnTab) {
-      navigation.navigate("Main", { screen: returnTab });
-      return;
-    }
-
-    navigation.navigate("Main", { screen: "Home" });
+    await submitTransaction();
   };
 
   /* ================= UI ================= */
@@ -576,7 +662,7 @@ export default function AddTransactionScreen({ navigation, route }) {
                   ) : null}
                 </View>
                 <Text style={styles.selectionTitle}>{acc.name}</Text>
-                <Text style={styles.selectionSubtitle}>₹{acc.balance}</Text>
+                <Text style={styles.selectionSubtitle}>₹{Number(acc.balance || 0).toFixed(2)}</Text>
               </TouchableOpacity>
             ))}
           </View>
@@ -698,7 +784,9 @@ export default function AddTransactionScreen({ navigation, route }) {
               <View style={styles.wrap}>
                 {goals.map((goal) => {
                   const target = Number(goal.target_amount || 0);
-                  const current = Number(goal.current_amount || 0);
+                  const current = goalProgressMap.has(goal.id)
+                    ? goalProgressMap.get(goal.id)
+                    : Number(goal.current_amount || 0);
                   const progress = target > 0 ? Math.min(current / target, 1) : 0;
 
                   return (
@@ -758,7 +846,11 @@ export default function AddTransactionScreen({ navigation, route }) {
           </View>
         )}
 
-        <TouchableOpacity style={styles.saveBtn} onPress={handleSave}>
+        <TouchableOpacity
+          style={[styles.saveBtn, loading && styles.saveBtnDisabled]}
+          onPress={handleSave}
+          disabled={loading}
+        >
           <Text style={styles.saveText}>
             {loading ? "Saving..." : saveLabel}
           </Text>
@@ -1061,6 +1153,9 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     shadowOffset: { width: 0, height: 6 },
     elevation: 6,
+  },
+  saveBtnDisabled: {
+    opacity: 0.7,
   },
   saveText: {
     textAlign: "center",

@@ -19,6 +19,7 @@ import AddBudgetScreen from "../screens/AddBudgetScreen";
 import BudgetDetailsScreen from "../screens/BudgetDetailsScreen";
 import AddCategoryScreen from "../screens/AddCategoryScreen";
 import AddGoalScreen from "../screens/AddGoalScreen";
+import GoalDetailsScreen from "../screens/GoalDetailsScreen";
 import AddLabelScreen from "../screens/AddLabelScreen";
 import AddLoanScreen from "../screens/AddLoanScreen";
 import LoanDetailsScreen from "../screens/LoanDetailsScreen";
@@ -31,10 +32,13 @@ import CalendarHeatmapScreen from "../screens/CalendarHeatmapScreen";
 import CategoryDetailsScreen from "../screens/CategoryDetailsScreen";
 import GoalsScreen from "../screens/GoalsScreen";
 import LabelsScreen from "../screens/LabelsScreen";
+import LabelDetailsScreen from "../screens/LabelDetailsScreen";
 import LoansScreen from "../screens/LoansScreen";
 import NotificationsScreen from "../screens/NotificationsScreen";
 import RecurringScreen from "../screens/RecurringScreen";
+import RecurringDetailsScreen from "../screens/RecurringDetailsScreen";
 import ReceiptScanScreen from "../screens/ReceiptScanScreen";
+import TransactionDetailsScreen from "../screens/TransactionDetailsScreen";
 import TransactionsScreen from "../screens/TransactionsScreen";
 
 
@@ -146,6 +150,7 @@ export default function AppNavigator() {
 
             <Stack.Screen name="AddTransaction" component={AddTransactionScreen} />
             <Stack.Screen name="UpdateTransaction" component={AddTransactionScreen} />
+            <Stack.Screen name="TransactionDetails" component={TransactionDetailsScreen} />
             <Stack.Screen name="Categories" component={CategoriesScreen} />
             <Stack.Screen name="Calendar Heatmap" component={CalendarHeatmapScreen} />
             <Stack.Screen name="CategoryDetails" component={CategoryDetailsScreen} />
@@ -155,10 +160,13 @@ export default function AppNavigator() {
             <Stack.Screen name="AddBudget" component={AddBudgetScreen} />
             <Stack.Screen name="UpdateBudget" component={AddBudgetScreen} />
             <Stack.Screen name="Goals" component={GoalsScreen} />
+            <Stack.Screen name="GoalDetails" component={GoalDetailsScreen} />
             <Stack.Screen name="Labels" component={LabelsScreen} />
+            <Stack.Screen name="LabelDetails" component={LabelDetailsScreen} />
             <Stack.Screen name="Loans" component={LoansScreen} />
             <Stack.Screen name="Notifications" component={NotificationsScreen} />
             <Stack.Screen name="Recurring" component={RecurringScreen} />
+            <Stack.Screen name="RecurringDetails" component={RecurringDetailsScreen} />
             <Stack.Screen name="AddGoal" component={AddGoalScreen} />
             <Stack.Screen name="UpdateGoal" component={AddGoalScreen} />
             <Stack.Screen name="AddLabel" component={AddLabelScreen} />

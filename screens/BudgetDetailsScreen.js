@@ -2,8 +2,21 @@ import Feather from "@expo/vector-icons/Feather";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import {
+  Animated,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  PanResponder,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Svg, { Circle, Line, Path } from "react-native-svg";
 import colors from "../theme/colors";
 import { supabase } from "../lib/supabase";
 import {
@@ -32,6 +45,95 @@ function getMonthKey(date) {
 
 function getMonthLabel(date) {
   return date.toLocaleDateString("en-US", { month: "short" });
+}
+
+function getNiceChartMax(value) {
+  const amount = Number(value || 0);
+
+  if (amount <= 0) {
+    return 1;
+  }
+
+  const roughStep = amount / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalized = roughStep / magnitude;
+
+  let niceStep = magnitude;
+  if (normalized > 1 && normalized <= 2) {
+    niceStep = 2 * magnitude;
+  } else if (normalized > 2 && normalized <= 5) {
+    niceStep = 5 * magnitude;
+  } else if (normalized > 5) {
+    niceStep = 10 * magnitude;
+  }
+
+  return niceStep * 4;
+}
+
+function createSmoothLinePath(points) {
+  if (!points.length) {
+    return "";
+  }
+
+  if (points.length === 1) {
+    return `M ${points[0].x},${points[0].y}`;
+  }
+
+  let path = `M ${points[0].x},${points[0].y}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const controlX = (current.x + next.x) / 2;
+    path += ` C ${controlX},${current.y} ${controlX},${next.y} ${next.x},${next.y}`;
+  }
+
+  return path;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function getInteractiveBudgetChartState({ data, chartWidth, maxValue, touchX, touchY, chartHeight, chartTopPadding, chartBottomPadding, chartSidePadding }) {
+  if (!data.length) {
+    return null;
+  }
+
+  const innerHeight = chartHeight - chartTopPadding - chartBottomPadding;
+  const baselineY = chartTopPadding + innerHeight;
+  const plotWidth = chartWidth - chartSidePadding * 2;
+  const safeTouchX = clamp(touchX, chartSidePadding, chartWidth - chartSidePadding);
+  const progress = plotWidth > 0 ? (safeTouchX - chartSidePadding) / plotWidth : 0;
+  const index = clamp(Math.round(progress * Math.max(data.length - 1, 0)), 0, data.length - 1);
+  const item = data[index];
+  const pointX =
+    data.length === 1
+      ? chartWidth / 2
+      : chartSidePadding + (plotWidth / Math.max(data.length - 1, 1)) * index;
+  const pointY = baselineY - (maxValue > 0 ? (item.value / maxValue) * innerHeight : 0);
+  const tooltipWidth = 172;
+  const tooltipHeight = 86;
+  const tooltipOffset = 12;
+
+  const tooltipLeft = clamp(
+    pointX - tooltipWidth / 2,
+    8,
+    Math.max(chartWidth - tooltipWidth - 8, 8)
+  );
+  const preferredTop = pointY - tooltipHeight - tooltipOffset;
+  const tooltipTop =
+    preferredTop < 8
+      ? clamp(pointY + tooltipOffset, 8, chartHeight - tooltipHeight - 8)
+      : clamp(preferredTop, 8, chartHeight - tooltipHeight - 8);
+
+  return {
+    item,
+    pointX,
+    pointY,
+    tooltipLeft,
+    tooltipTop,
+    tooltipWidth,
+  };
 }
 
 function getLastThreeMonthsSeries({ budget, transactions, now = new Date() }) {
@@ -457,6 +559,11 @@ export default function BudgetDetailsScreen({ navigation, route }) {
 }
 
 function BudgetTrendChart({ budget, transactions }) {
+  const { width } = Dimensions.get("window");
+  const [chartInteraction, setChartInteraction] = useState(null);
+  const tooltipOpacity = useState(new Animated.Value(0))[0];
+  const tooltipScale = useState(new Animated.Value(0.96))[0];
+  const tooltipTranslate = useState(new Animated.ValueXY({ x: 0, y: 8 }))[0];
   const bars = useMemo(() => {
     return getLastThreeMonthsSeries({
       budget,
@@ -465,53 +572,254 @@ function BudgetTrendChart({ budget, transactions }) {
   }, [budget, transactions]);
 
   const budgetAmount = Number(budget?.amount || 0);
-  const max = Math.max(budgetAmount, ...bars.map((bar) => bar.value), 1);
+  const max = getNiceChartMax(Math.max(budgetAmount, ...bars.map((bar) => bar.value), 1));
+  const chartWidth = Math.max(width - 96, 260);
+  const chartHeight = 210;
+  const chartTopPadding = 18;
+  const chartBottomPadding = 30;
+  const chartSidePadding = 16;
+  const innerHeight = chartHeight - chartTopPadding - chartBottomPadding;
+  const baselineY = chartTopPadding + innerHeight;
+  const plotWidth = chartWidth - chartSidePadding * 2;
+  const points = bars.map((bar, index) => ({
+    x:
+      bars.length === 1
+        ? chartWidth / 2
+        : chartSidePadding + (plotWidth / Math.max(bars.length - 1, 1)) * index,
+    y: baselineY - (bar.value / max) * innerHeight,
+    value: bar.value,
+    label: bar.label,
+    key: bar.key,
+  }));
+  const linePath = createSmoothLinePath(points);
+  const yTicks = [max, max * 0.75, max * 0.5, max * 0.25, 0];
+
+  useEffect(() => {
+    setChartInteraction(null);
+  }, [budget?.id]);
+
+  const showChartInteraction = useCallback(
+    (touchX, touchY) => {
+      const nextInteraction = getInteractiveBudgetChartState({
+        data: points,
+        chartWidth,
+        maxValue: max,
+        touchX,
+        touchY,
+        chartHeight,
+        chartTopPadding,
+        chartBottomPadding,
+        chartSidePadding,
+      });
+
+      if (!nextInteraction) {
+        return;
+      }
+
+      setChartInteraction((current) => {
+        if (!current) {
+          tooltipOpacity.stopAnimation();
+          tooltipScale.stopAnimation();
+          tooltipOpacity.setValue(0);
+          tooltipScale.setValue(0.96);
+          Animated.parallel([
+            Animated.spring(tooltipOpacity, {
+              toValue: 1,
+              useNativeDriver: true,
+              tension: 180,
+              friction: 16,
+            }),
+            Animated.spring(tooltipScale, {
+              toValue: 1,
+              useNativeDriver: true,
+              tension: 180,
+              friction: 16,
+            }),
+          ]).start();
+        }
+
+        tooltipTranslate.setValue({
+          x: nextInteraction.tooltipLeft,
+          y: nextInteraction.tooltipTop,
+        });
+
+        return nextInteraction;
+      });
+    },
+    [
+      chartBottomPadding,
+      chartHeight,
+      chartSidePadding,
+      chartTopPadding,
+      chartWidth,
+      max,
+      points,
+      tooltipOpacity,
+      tooltipScale,
+      tooltipTranslate,
+    ]
+  );
+
+  const clearChartInteraction = useCallback(() => {
+    setChartInteraction((current) => {
+      if (current) {
+        tooltipOpacity.stopAnimation();
+        tooltipScale.stopAnimation();
+        Animated.parallel([
+          Animated.timing(tooltipOpacity, {
+            toValue: 0,
+            duration: 120,
+            useNativeDriver: true,
+          }),
+          Animated.timing(tooltipScale, {
+            toValue: 0.96,
+            duration: 120,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
+
+      return null;
+    });
+  }, [tooltipOpacity, tooltipScale]);
+
+  const chartPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (evt) => {
+          showChartInteraction(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+        },
+        onPanResponderMove: (evt) => {
+          showChartInteraction(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+        },
+        onPanResponderRelease: clearChartInteraction,
+        onPanResponderTerminate: clearChartInteraction,
+      }),
+    [clearChartInteraction, showChartInteraction]
+  );
 
   return (
     <View style={styles.chartWrap}>
-      <View style={styles.verticalChartWrap}>
-        <View style={styles.verticalChartBody}>
-          <View style={styles.verticalYAxis}>
-            {[max, max * 0.75, max * 0.5, max * 0.25, 0].map((tick) => (
-              <Text key={tick} style={styles.verticalTick}>
-                {formatCurrency(tick)}
+      <View style={styles.reportChartWrap}>
+        <View style={styles.reportYAxis}>
+          {yTicks.map((tick) => (
+            <Text key={tick} style={styles.reportTick}>
+              {formatCurrency(tick)}
+            </Text>
+          ))}
+        </View>
+
+        <View style={styles.reportChartSvgWrap}>
+          <Svg width={chartWidth} height={chartHeight}>
+            {yTicks.slice(0, -1).map((tick) => {
+              const y = chartTopPadding + innerHeight * (1 - tick / max);
+              return (
+                <Line
+                  key={tick}
+                  x1={chartSidePadding}
+                  y1={y}
+                  x2={chartWidth - chartSidePadding}
+                  y2={y}
+                  stroke="#5b433c"
+                  strokeWidth="1"
+                />
+              );
+            })}
+
+            <Line
+              x1={chartSidePadding}
+              y1={baselineY - (budgetAmount / max) * innerHeight}
+              x2={chartWidth - chartSidePadding}
+              y2={baselineY - (budgetAmount / max) * innerHeight}
+              stroke="#7bd0ff"
+              strokeWidth="1.5"
+              strokeDasharray="6 6"
+              opacity="0.9"
+            />
+
+            <Path
+              d={linePath}
+              fill="none"
+              stroke={budget.color || "#ffb49a"}
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity="0.95"
+            />
+
+            {points.map((point) => (
+              <Circle
+                key={point.key}
+                cx={point.x}
+                cy={point.y}
+                r="4.5"
+                fill="#f8efe9"
+                stroke={budget.color || "#ffb49a"}
+                strokeWidth="2"
+              />
+            ))}
+
+            {chartInteraction ? (
+              <>
+                <Line
+                  x1={chartInteraction.pointX}
+                  y1={chartTopPadding}
+                  x2={chartInteraction.pointX}
+                  y2={baselineY}
+                  stroke={budget.color || "#ffb49a"}
+                  strokeOpacity="0.28"
+                  strokeWidth="2"
+                  strokeDasharray="5 6"
+                />
+                <Circle
+                  cx={chartInteraction.pointX}
+                  cy={chartInteraction.pointY}
+                  r="8"
+                  fill={budget.color || "#ffb49a"}
+                  fillOpacity="0.16"
+                />
+                <Circle
+                  cx={chartInteraction.pointX}
+                  cy={chartInteraction.pointY}
+                  r="4"
+                  fill="#f8efe9"
+                  stroke={budget.color || "#ffb49a"}
+                  strokeWidth="2"
+                />
+              </>
+            ) : null}
+          </Svg>
+
+          <View style={styles.reportGestureLayer} {...chartPanResponder.panHandlers} />
+
+          {chartInteraction ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.reportTooltip,
+                {
+                  opacity: tooltipOpacity,
+                  transform: [
+                    { translateX: tooltipTranslate.x },
+                    { translateY: tooltipTranslate.y },
+                    { scale: tooltipScale },
+                  ],
+                },
+              ]}
+            >
+              <Text style={styles.reportTooltipLabel}>{chartInteraction.item.label}</Text>
+              <Text style={styles.reportTooltipText}>Spent {formatCurrency(chartInteraction.item.value)}</Text>
+            </Animated.View>
+          ) : null}
+
+          <View style={[styles.reportLabelsRow, { width: chartWidth, paddingHorizontal: chartSidePadding }]}>
+            {points.map((point) => (
+              <Text key={point.key} style={styles.reportLabel}>
+                {point.label}
               </Text>
             ))}
-          </View>
-
-          <View style={styles.verticalPlotArea}>
-            <View style={styles.verticalGrid}>
-              {[0, 1, 2, 3].map((line) => (
-                <View key={line} style={styles.verticalGridLine} />
-              ))}
-              <View
-                style={[
-                  styles.verticalBudgetLine,
-                  {
-                    bottom: `${Math.max(0, Math.min(100, (budgetAmount / max) * 100))}%`,
-                  },
-                ]}
-              />
-            </View>
-            <View style={styles.verticalBarsRow}>
-              {bars.map((bar) => (
-                <View key={bar.key} style={styles.verticalBarColumn}>
-                  <View style={styles.verticalBarTrack}>
-                    <View
-                      style={[
-                        styles.verticalBarFill,
-                        {
-                          height: `${Math.max(0, (bar.value / max) * 100)}%`,
-                          opacity: bar.value > 0 ? 1 : 0,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <Text style={styles.verticalBarValue}>{formatCurrency(bar.value)}</Text>
-                  <Text style={styles.verticalBarLabel}>{bar.label}</Text>
-                </View>
-              ))}
-            </View>
           </View>
         </View>
         <Text style={styles.chartAxisLabel}>Months on X axis, budget amount on Y axis</Text>
@@ -591,87 +899,71 @@ const styles = StyleSheet.create({
   },
   cardTitle: { color: colors.text, fontSize: 20, fontWeight: "800", marginBottom: 14 },
   chartWrap: { minHeight: 220 },
-  verticalChartWrap: { gap: 10 },
-  verticalChartBody: {
-    flexDirection: "row",
-    alignItems: "stretch",
+  reportChartWrap: {
+    position: "relative",
     minHeight: 220,
   },
-  verticalYAxis: {
-    width: 78,
+  reportYAxis: {
+    position: "absolute",
+    left: 0,
+    top: 10,
+    bottom: 28,
     justifyContent: "space-between",
-    paddingRight: 10,
-    paddingBottom: 30,
+    zIndex: 2,
   },
-  verticalTick: {
+  reportTick: {
     color: "#d5c8be",
     fontSize: 12,
     fontWeight: "700",
     textAlign: "right",
+    width: 44,
   },
-  verticalPlotArea: {
-    flex: 1,
+  reportChartSvgWrap: {
+    marginLeft: 52,
     position: "relative",
-    paddingBottom: 4,
   },
-  verticalGrid: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: "space-between",
-    paddingBottom: 34,
-  },
-  verticalGridLine: {
-    height: 1,
-    backgroundColor: "#5b433c",
-    opacity: 0.7,
-  },
-  verticalBudgetLine: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    height: 1,
-    borderTopWidth: 1,
-    borderStyle: "dashed",
-    borderColor: "#7bd0ff",
-    opacity: 0.9,
-  },
-  verticalBarsRow: {
-    flex: 1,
+  reportLabelsRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-around",
-    paddingBottom: 18,
+    marginTop: 6,
   },
-  verticalBarColumn: {
-    width: 72,
-    alignItems: "center",
-    justifyContent: "flex-end",
+  reportLabel: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 10,
+    fontWeight: "800",
+    textAlign: "center",
   },
-  verticalBarTrack: {
-    width: 24,
-    height: 140,
-    borderRadius: 999,
-    backgroundColor: "#5b433c",
-    justifyContent: "flex-end",
-    overflow: "hidden",
+  reportGestureLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 5,
   },
-  verticalBarFill: {
-    width: "100%",
-    borderRadius: 999,
-    backgroundColor: "#ffb49a",
+  reportTooltip: {
+    position: "absolute",
+    width: 172,
+    minHeight: 86,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 18,
+    backgroundColor: "rgba(29, 18, 13, 0.95)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 194, 171, 0.22)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+    elevation: 6,
+    zIndex: 10,
   },
-  verticalBarValue: {
-    marginTop: 10,
-    color: "#d5c8be",
+  reportTooltipLabel: {
+    color: "#f8efe9",
     fontSize: 12,
     fontWeight: "800",
-    textAlign: "center",
+    marginBottom: 8,
   },
-  verticalBarLabel: {
-    marginTop: 4,
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: "800",
-    textAlign: "center",
+  reportTooltipText: {
+    color: "#d5c8be",
+    fontSize: 12,
+    fontWeight: "700",
   },
   chartAxisLabel: {
     color: "#d5c8be",

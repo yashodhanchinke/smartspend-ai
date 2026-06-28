@@ -140,9 +140,11 @@ const CalendarMonthPage = memo(function CalendarMonthPage({
 });
 
 export default function CalendarHeatmapScreen({ navigation }) {
-  const today = new Date();
-  const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const months = useMemo(() => buildMonthRange(currentMonth), [currentMonth]);
+  const today = useMemo(() => new Date(), []);
+  const months = useMemo(() => {
+    const currentMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    return buildMonthRange(currentMonth);
+  }, [today]);
   const currentMonthIndex = months.length - 1;
   const listRef = useRef(null);
   const { width } = useWindowDimensions();
@@ -370,9 +372,8 @@ export default function CalendarHeatmapScreen({ navigation }) {
               categoryIcon={transaction.categories?.icon || "credit-card-outline"}
               showDivider={index !== selectedTransactions.length - 1}
               onPress={() =>
-                navigation.navigate("UpdateTransaction", {
+                navigation.navigate("TransactionDetails", {
                   transaction,
-                  returnTab: "Home",
                 })
               }
             />

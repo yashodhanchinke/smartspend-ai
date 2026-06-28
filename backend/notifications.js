@@ -90,6 +90,98 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function hashString(value) {
+  let hash = 0;
+  const text = String(value || "");
+
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
+}
+
+function pickFromList(seed, values) {
+  if (!values.length) {
+    return "";
+  }
+
+  return values[hashString(seed) % values.length];
+}
+
+function pickVariant(seed, variants) {
+  if (!Array.isArray(variants) || !variants.length) {
+    return "";
+  }
+
+  return variants[hashString(seed) % variants.length];
+}
+
+function getNotificationEmoji(candidate, seedOverride = null) {
+  const moduleKey = String(candidate?.source_module || "").toLowerCase();
+  const toneKey = String(candidate?.tone || "").toLowerCase();
+  const seed = seedOverride || candidate?.fingerprint || candidate?.summary || candidate?.fallbackTitle || "nudge";
+
+  const emojiMap = {
+    budget: ["🧾", "💸", "⚠️"],
+    loan: ["🏦", "⏰", "💳"],
+    goal: ["🎯", "🌱", "🏁"],
+    recurring: ["🔁", "⏰", "📅"],
+    spending: ["💸", "📉", "⚠️"],
+    account: ["🏦", "⚠️", "💰"],
+    advisor: ["💡", "📊", "🧠"],
+    nudge: ["✅", "🌟", "💬"],
+  };
+
+  if (emojiMap[moduleKey]) {
+    return pickFromList(seed, emojiMap[moduleKey]);
+  }
+
+  if (toneKey === "critical") return pickFromList(seed, ["🚨", "🛑", "⚠️"]);
+  if (toneKey === "warning") return pickFromList(seed, ["⚠️", "🔔", "⏰"]);
+  if (toneKey === "positive") return pickFromList(seed, ["✅", "🌱", "🏆"]);
+
+  return pickFromList(seed, ["💬", "✨", "📌"]);
+}
+
+function ensureEmojiPrefix(text, emoji) {
+  const value = String(text || "").trim();
+  if (!emoji || !value) {
+    return value;
+  }
+
+  if (value.startsWith(emoji)) {
+    return value;
+  }
+
+  return `${emoji} ${value}`;
+}
+
+function getGenerationCopySeed(candidate, now = new Date()) {
+  return `${candidate?.fingerprint || "nudge"}:${new Date(now).getTime()}`;
+}
+
+function finalizeNotificationCopy(candidate, title, body, languageMode, now = new Date()) {
+  const copySeed = getGenerationCopySeed(candidate, now);
+  const emoji = getNotificationEmoji(candidate, copySeed);
+  const resolvedTitleSource =
+    title ||
+    pickVariant(copySeed, candidate.fallbackTitleVariants) ||
+    candidate.fallbackTitle;
+  const resolvedBodySource =
+    body ||
+    pickVariant(copySeed, candidate.fallbackBodyVariants) ||
+    candidate.fallbackBody;
+  const resolvedTitle = ensureEmojiPrefix(resolvedTitleSource, emoji);
+  const resolvedBody = ensureEmojiPrefix(resolvedBodySource, emoji);
+
+  return {
+    title: resolvedTitle,
+    body: resolvedBody,
+    language: languageMode || candidate.language || "hinglish",
+  };
+}
+
 function getCategoryIdsForBudget(budget) {
   const linkedIds = (budget.budget_categories || [])
     .map((item) => item.category_id || item.categories?.id)
@@ -151,11 +243,28 @@ function buildBudgetCandidates(budgets, transactions, now = new Date()) {
         title: "",
         body: "",
         summary: `${budget.name || "Budget"} (${categoryLabel}) is at ${Math.round(progress * 100)}% usage. Limit ${formatCurrency(amount)}, spent ${formatCurrency(spent)}, remaining ${formatCurrency(Math.max(amount - spent, 0))}.`,
-        fallbackTitle: progress >= 1 ? `${budget.name || "Budget"} crossed` : `${budget.name || "Budget"} almost full`,
-        fallbackBody:
-          progress >= 1
-            ? `${categoryLabel}: budget cross ho gaya, aaj home/plan karke spend cut karo.`
-            : `${categoryLabel}: ${formatCurrency(Math.max(amount - spent, 0))} left, aaj thoda tight rakho.`,
+        fallbackTitleVariants: progress >= 1
+          ? [
+              `${budget.name || "Budget"} crossed`,
+              `${budget.name || "Budget"} limit paar`,
+              `${budget.name || "Budget"} red zone`,
+            ]
+          : [
+              `${budget.name || "Budget"} almost full`,
+              `${budget.name || "Budget"} warning`,
+              `${budget.name || "Budget"} close hai`,
+            ],
+        fallbackBodyVariants: progress >= 1
+          ? [
+              `${categoryLabel}: budget cross ho gaya, aaj ke spend ko immediately pause karo.`,
+              `${categoryLabel}: limit hit ho chuki hai, abhi non-essential spend band karo.`,
+              `${categoryLabel}: over-budget ho gaya, next buy ko hold karo.`,
+            ]
+          : [
+              `${categoryLabel}: ${formatCurrency(Math.max(amount - spent, 0))} left, aaj thoda tight rakho.`,
+              `${categoryLabel}: bas ${formatCurrency(Math.max(amount - spent, 0))} bacha hai, careful raho.`,
+              `${categoryLabel}: runway kam hai, next swipe se pehle socho.`,
+            ],
       };
     })
     .filter(Boolean);
@@ -258,6 +367,73 @@ function buildRecurringCandidates(items, now = new Date()) {
     }));
 }
 
+function buildUnplannedExpenseCandidates(transactions, now = new Date()) {
+  const monthRange = getBudgetRange("monthly", now);
+  const unplannedExpenses = (transactions || []).filter((transaction) => {
+    if (transaction.type !== "expense") {
+      return false;
+    }
+
+    if (!isDateInRange(transaction.date, monthRange.start, monthRange.end)) {
+      return false;
+    }
+
+    const categoryName = String(transaction.categories?.name || "").trim().toLowerCase();
+    return !categoryName || categoryName === "other" || categoryName === "uncategorized";
+  });
+
+  const total = unplannedExpenses.reduce((sum, transaction) => sum + Number(transaction.amount || 0), 0);
+
+  if (total < 750) {
+    return [];
+  }
+
+  const severity = total >= 2000 ? "critical" : "warning";
+  const titleVariants =
+    severity === "critical"
+      ? [
+          "Unplanned spend alarm",
+          "Expense leak detected",
+          "Control this spend now",
+        ]
+      : [
+          "Unplanned spend alert",
+          "Extra spend spotted",
+          "Track this expense now",
+        ];
+  const bodyVariants =
+    severity === "critical"
+      ? [
+          `₹${Math.round(total)} uncategorized spend is sitting in this month. Tag it now and stop the next swipe.`,
+          `${formatCurrency(total)} is slipping out without a category. Review it now and cut the leak.`,
+          `This month’s unplanned spend hit ${formatCurrency(total)}. Freeze non-essential buys until it is checked.`,
+        ]
+      : [
+          `${formatCurrency(total)} uncategorized spend is pending this month. Tag it and review what was avoidable.`,
+          `Unplanned expenses touched ${formatCurrency(total)}. Check them now before they become a habit.`,
+          `This month has ${formatCurrency(total)} in extra spend. Review it and keep the next purchase tight.`,
+        ];
+
+  return [
+    {
+      fingerprint: `expense:unplanned:${formatDateKey(monthRange.start)}:${Math.round(total)}`,
+      source_module: "spending",
+      source_entity_type: "unplanned_expense",
+      source_entity_id: null,
+      tone: severity,
+      language: "hinglish",
+      kind: "nudge",
+      title: "",
+      body: "",
+      summary: `Unplanned or uncategorized expense total this month is ${formatCurrency(total)}.`,
+      fallbackTitleVariants: titleVariants,
+      fallbackBodyVariants: bodyVariants,
+      fallbackTitle: titleVariants[0],
+      fallbackBody: bodyVariants[0],
+    },
+  ];
+}
+
 function buildTrendCandidates(transactions, now = new Date()) {
   const expenses = (transactions || []).filter((item) => item.type === "expense");
   const thisWeekStart = getStartOfWeek(now);
@@ -286,8 +462,18 @@ function buildTrendCandidates(transactions, now = new Date()) {
       title: "",
       body: "",
       summary: `This week spending ${formatCurrency(thisWeekTotal)} is ${changePercent}% higher than last week's ${formatCurrency(lastWeekTotal)}.`,
-      fallbackTitle: `Spending pace badh gaya`,
-      fallbackBody: `Is week spend kaafi fast hai, aaj 1 non-essential cut karke pace control karo.`,
+      fallbackTitleVariants: [
+        "Spending pace up",
+        "Week spend alert",
+        "Pace control needed",
+      ],
+      fallbackBodyVariants: [
+        `Is week spend kaafi fast hai. Aaj 1 non-essential cut karke pace control karo.`,
+        `Last week ke mukable spend fast hua hai. Next swipe se pehle pause karo.`,
+        `Weekly expense jump notice hua hai. Small cut now will help a lot.`,
+      ],
+      fallbackTitle: "Spending pace up",
+      fallbackBody: `Is week spend kaafi fast hai. Aaj 1 non-essential cut karke pace control karo.`,
     },
   ];
 }
@@ -359,6 +545,16 @@ function buildCategoryOverspendCandidates(transactions, now = new Date()) {
       title: "",
       body: "",
       summary: `Top category this month is ${topCategoryName} at ${formatCurrency(topAmount)}.`,
+      fallbackTitleVariants: [
+        `${topCategoryName}: spend zyada`,
+        `${topCategoryName} is leading`,
+        `${topCategoryName} alert`,
+      ],
+      fallbackBodyVariants: [
+        `${formatCurrency(topAmount)} spent. ${suggestion}`,
+        `${topCategoryName} ka share high hai. ${suggestion}`,
+        `${formatCurrency(topAmount)} ek category me gaya hai. ${suggestion}`,
+      ],
       fallbackTitle: `${topCategoryName}: spend zyada`,
       fallbackBody: `${formatCurrency(topAmount)} spent. ${suggestion}`,
     },
@@ -398,8 +594,18 @@ function buildUnnecessarySpendCandidates(transactions, now = new Date()) {
       title: "",
       body: "",
       summary: `Food delivery spend in last 14 days is ${formatCurrency(deliveryTotal)}.`,
-      fallbackTitle: "Delivery spend check",
-      fallbackBody: `${formatCurrency(deliveryTotal)} delivery spend, aaj ghar ka option choose karo.`,
+      fallbackTitleVariants: [
+        "Delivery spend alert",
+        "Food app spend up",
+        "Delivery pause needed",
+      ],
+      fallbackBodyVariants: [
+        `${formatCurrency(deliveryTotal)} delivery spend ho gaya. Aaj ghar ka option choose karo.`,
+        `Last 14 days me ${formatCurrency(deliveryTotal)} delivery spend hua hai. Next order se pehle ruk jao.`,
+        `Delivery bill fast badh raha hai. ${formatCurrency(deliveryTotal)} ko dekhkar aaj home food pick karo.`,
+      ],
+      fallbackTitle: "Delivery spend alert",
+      fallbackBody: `${formatCurrency(deliveryTotal)} delivery spend ho gaya. Aaj ghar ka option choose karo.`,
     });
   }
 
@@ -415,8 +621,18 @@ function buildUnnecessarySpendCandidates(transactions, now = new Date()) {
       title: "",
       body: "",
       summary: `Shopping spend in last 14 days is ${formatCurrency(impulseTotal)}.`,
+      fallbackTitleVariants: [
+        "Shopping pause",
+        "Cart review needed",
+        "Impulse buy alert",
+      ],
+      fallbackBodyVariants: [
+        `${formatCurrency(impulseTotal)} shopping spend hua hai. Next buy se pehle 48-hour rule follow karo.`,
+        `Shopping pace fast hai. ${formatCurrency(impulseTotal)} ko dekhkar cart review karo.`,
+        `Impulse spend pick up ho gaya hai. Aaj ek non-essential item hold karo.`,
+      ],
       fallbackTitle: "Shopping pause",
-      fallbackBody: `${formatCurrency(impulseTotal)} shopping spend, next buy se pehle 48-hour rule follow karo.`,
+      fallbackBody: `${formatCurrency(impulseTotal)} shopping spend hua hai. Next buy se pehle 48-hour rule follow karo.`,
     });
   }
 
@@ -460,8 +676,18 @@ function buildLowBalanceCandidates({ accounts, transactions, now = new Date() })
       title: "",
       body: "",
       summary: `This month expenses ${formatCurrency(monthExpense)} and remaining total balance ${formatCurrency(totalBalance)} implies ${usedPercent}% used ratio.`,
+      fallbackTitleVariants: [
+        "Balance pace fast",
+        "Cash buffer low",
+        "Spend vs balance tight",
+      ],
+      fallbackBodyVariants: [
+        `Is month approx ${usedPercent}% use ho gaya. Aaj 1 non-essential skip karo.`,
+        `Cash buffer pressure me hai. ${usedPercent}% use ho chuka hai, thoda hold rakho.`,
+        `Balance speed fast hai. Next spend se pehle pause karo.`,
+      ],
       fallbackTitle: "Balance pace fast",
-      fallbackBody: `Is month approx ${usedPercent}% use ho gaya, aaj 1 non-essential skip karo.`,
+      fallbackBody: `Is month approx ${usedPercent}% use ho gaya. Aaj 1 non-essential skip karo.`,
     },
   ];
 }
@@ -487,6 +713,16 @@ function buildPositiveKeepItUpCandidates({ budgets, transactions, now = new Date
         tone: "positive",
         kind: "nudge",
         summary: `Monthly expense ${formatCurrency(monthExpense)} is within 70% of total budget ${formatCurrency(budgetTotal)}.`,
+        fallbackTitleVariants: [
+          "Budget balanced",
+          "Budget on track",
+          "Good pace, keep it",
+        ],
+        fallbackBodyVariants: [
+          "Aapka budget control me hai, keep going!",
+          "Budget solid hai, isi pace ko maintain rakho.",
+          "Sahi direction me ho, bas consistency banaye rakho.",
+        ],
         fallbackTitle: "Budget balanced",
         fallbackBody: "Aapka budget control me hai, keep going!",
       },
@@ -507,8 +743,18 @@ function buildPositiveKeepItUpCandidates({ budgets, transactions, now = new Date
           tone: "positive",
           kind: "nudge",
           summary: `User has no budget, but is saving ${Math.round(savingsRatio * 100)}% of income.`,
+          fallbackTitleVariants: [
+            "Natural Saver",
+            "Savings streak on",
+            "Nice savings pace",
+          ],
+          fallbackBodyVariants: [
+            `Bina budget ke bhi ${Math.round(savingsRatio * 100)}% save kar rahe ho, kamaal hai!`,
+            `Savings pace strong hai. Is rhythm ko bana ke rakho.`,
+            `Budget ke bina bhi disciplined ho. Keep this habit alive!`,
+          ],
           fallbackTitle: "Natural Saver",
-          fallbackBody: `Bina budget ke bhi ${Math.round(savingsRatio * 100)}% save kar rahe ho, kamaal hai! 💎`,
+          fallbackBody: `Bina budget ke bhi ${Math.round(savingsRatio * 100)}% save kar rahe ho, kamaal hai!`,
         },
       ];
     }
@@ -523,6 +769,7 @@ function buildCandidates({ budgets, loans, goals, recurringTransactions, transac
     ...buildLoanCandidates(loans, now),
     ...buildGoalCandidates(goals, now),
     ...buildRecurringCandidates(recurringTransactions, now),
+    ...buildUnplannedExpenseCandidates(transactions, now),
     ...buildTrendCandidates(transactions, now),
     ...buildCategoryOverspendCandidates(transactions, now),
     ...buildUnnecessarySpendCandidates(transactions, now),
@@ -616,15 +863,13 @@ function extractJsonArray(text) {
   return JSON.parse(text.slice(start, end + 1));
 }
 
-async function rewriteCandidatesWithGemini({ candidates, profileName, languageMode }) {
+async function rewriteCandidatesWithGemini({ candidates, profileName, languageMode, now = new Date() }) {
   const model = getModel();
 
   if (!model || !candidates.length) {
     return candidates.map((candidate) => ({
       ...candidate,
-      title: candidate.fallbackTitle,
-      body: candidate.fallbackBody,
-      language: languageMode || "hinglish",
+      ...finalizeNotificationCopy(candidate, candidate.fallbackTitle, candidate.fallbackBody, languageMode, now),
     }));
   }
 
@@ -637,6 +882,10 @@ Requirements:
 - Write a short title and body for each item.
 - Language mode: ${languageMode || "hinglish"}.
 - Tone should inspire saving money, chasing goals, settling loans, and staying on top of recurring payments.
+- Use one related emoji naturally in the title or body so the message feels alive, but keep it professional.
+- Make each notification feel distinct; do not reuse the same opener across items.
+- Make the wording feel fresh for this generation; avoid repeating the same notification text or template.
+- For spending leaks, be direct and strict: clearly say it is an unplanned or uncategorized expense and ask the user to review it now.
 - Hinglish should stay natural and light, not too slangy.
 - Keep title under 55 characters.
 - Keep body under 140 characters.
@@ -664,21 +913,24 @@ ${JSON.stringify(candidates.map((candidate) => ({
 
     return candidates.map((candidate) => {
       const rewritten = parsed.find((item) => item.fingerprint === candidate.fingerprint) || {};
+      const merged = finalizeNotificationCopy(
+        candidate,
+        String(rewritten.title || candidate.fallbackTitle).trim(),
+        String(rewritten.body || candidate.fallbackBody).trim(),
+        String(rewritten.language || languageMode || "hinglish").trim(),
+        now
+      );
 
       return {
         ...candidate,
-        title: String(rewritten.title || candidate.fallbackTitle).trim(),
-        body: String(rewritten.body || candidate.fallbackBody).trim(),
-        language: String(rewritten.language || languageMode || "hinglish").trim(),
+        ...merged,
       };
     });
   } catch (error) {
     console.error("Gemini notification rewrite failed:", error.message);
     return candidates.map((candidate) => ({
       ...candidate,
-      title: candidate.fallbackTitle,
-      body: candidate.fallbackBody,
-      language: languageMode || "hinglish",
+      ...finalizeNotificationCopy(candidate, candidate.fallbackTitle, candidate.fallbackBody, languageMode, now),
     }));
   }
 }
@@ -1003,6 +1255,16 @@ export async function generateNotificationsForUser({ userId, force = false }) {
         title: "Keep it up",
         body: "Aaj ka spend mindful rakho, chhote savings se bada impact aata hai.",
         summary: "Generic keep-it-up nudge when no other triggers fire.",
+        fallbackTitleVariants: [
+          "Keep it up",
+          "Mindful spend",
+          "Small win today",
+        ],
+        fallbackBodyVariants: [
+          "Aaj ka spend mindful rakho, chhote savings se bada impact aata hai.",
+          "Ek small saving bhi aaj ka nudge strong bana deti hai.",
+          "Thoda pause, thoda plan, aur spend aur sharp ho jayega.",
+        ],
         fallbackTitle: "Keep it up",
         fallbackBody: "Aaj ka spend mindful rakho, chhote savings se bada impact aata hai.",
       },
@@ -1013,6 +1275,7 @@ export async function generateNotificationsForUser({ userId, force = false }) {
     candidates,
     profileName,
     languageMode: preferences?.language_mode || "hinglish",
+    now,
   });
   const persisted = await persistNotifications(userId, rewritten);
 

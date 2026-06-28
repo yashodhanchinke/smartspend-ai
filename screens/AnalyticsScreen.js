@@ -1,25 +1,72 @@
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Animated,
   ActivityIndicator,
   Dimensions,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
-import { LineChart } from "react-native-chart-kit";
+import Svg, { Circle, Line, Path } from "react-native-svg";
 import { SafeAreaView } from "react-native-safe-area-context";
 import ScreenHeader from "../components/ScreenHeader";
 import { supabase } from "../lib/supabase";
 import colors from "../theme/colors";
 
-const CHART_WIDTH = Dimensions.get("window").width - 32;
 const PREDICTION_WEIGHTS = [0.05, 0.05, 0.15, 0.2, 0.25, 0.3];
+const SCREEN_WIDTH = Dimensions.get("window").width;
 
 const formatCurrency = (value) => `₹${Number(value || 0).toFixed(2)}`;
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+const getNiceChartMax = (value) => {
+  const amount = Number(value || 0);
+
+  if (amount <= 0) {
+    return 1;
+  }
+
+  const roughStep = amount / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const normalized = roughStep / magnitude;
+
+  let niceStep = magnitude;
+  if (normalized > 1 && normalized <= 2) {
+    niceStep = 2 * magnitude;
+  } else if (normalized > 2 && normalized <= 5) {
+    niceStep = 5 * magnitude;
+  } else if (normalized > 5) {
+    niceStep = 10 * magnitude;
+  }
+
+  return niceStep * 4;
+};
+
+const createSmoothLinePath = (points) => {
+  if (!points.length) {
+    return "";
+  }
+
+  if (points.length === 1) {
+    return `M ${points[0].x},${points[0].y}`;
+  }
+
+  let path = `M ${points[0].x},${points[0].y}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    const controlX = (current.x + next.x) / 2;
+    path += ` C ${controlX},${current.y} ${controlX},${next.y} ${next.x},${next.y}`;
+  }
+
+  return path;
+};
 
 const parseStoredDate = (value) => {
   if (!value) return null;
@@ -208,6 +255,275 @@ const buildAnalytics = (transactions, insights) => {
   };
 };
 
+function getInteractiveAnalyticsState({
+  data,
+  chartWidth,
+  maxValue,
+  touchX,
+  touchY,
+  chartHeight,
+  chartTopPadding,
+  chartBottomPadding,
+  chartSidePadding,
+}) {
+  if (!data.length) {
+    return null;
+  }
+
+  const innerHeight = chartHeight - chartTopPadding - chartBottomPadding;
+  const baselineY = chartTopPadding + innerHeight;
+  const plotWidth = chartWidth - chartSidePadding * 2;
+  const safeTouchX = clamp(touchX, chartSidePadding, chartWidth - chartSidePadding);
+  const progress = plotWidth > 0 ? (safeTouchX - chartSidePadding) / plotWidth : 0;
+  const index = clamp(Math.round(progress * Math.max(data.length - 1, 0)), 0, data.length - 1);
+  const pointX =
+    data.length === 1
+      ? chartWidth / 2
+      : chartSidePadding + (plotWidth / Math.max(data.length - 1, 1)) * index;
+  const pointY = baselineY - (maxValue > 0 ? (data[index] / maxValue) * innerHeight : 0);
+  const tooltipWidth = 172;
+  const tooltipHeight = 86;
+  const tooltipOffset = 12;
+  const tooltipLeft = clamp(pointX - tooltipWidth / 2, 8, Math.max(chartWidth - tooltipWidth - 8, 8));
+  const preferredTop = pointY - tooltipHeight - tooltipOffset;
+  const tooltipTop =
+    preferredTop < 8
+      ? clamp(pointY + tooltipOffset, 8, chartHeight - tooltipHeight - 8)
+      : clamp(preferredTop, 8, chartHeight - tooltipHeight - 8);
+
+  return {
+    index,
+    pointX,
+    pointY,
+    tooltipLeft,
+    tooltipTop,
+  };
+}
+
+function AnalyticsTrendChart({ lineData }) {
+  const values = useMemo(() => lineData?.datasets?.[0]?.data || [], [lineData]);
+  const labels = useMemo(() => lineData?.labels || [], [lineData]);
+  const [chartInteraction, setChartInteraction] = useState(null);
+  const tooltipOpacity = useState(new Animated.Value(0))[0];
+  const tooltipScale = useState(new Animated.Value(0.96))[0];
+  const tooltipTranslate = useState(new Animated.ValueXY({ x: 0, y: 8 }))[0];
+
+  const chartWidth = Math.max(SCREEN_WIDTH - 124, 220);
+  const chartHeight = 260;
+  const chartTopPadding = 18;
+  const chartBottomPadding = 34;
+  const chartSidePadding = 22;
+  const innerHeight = chartHeight - chartTopPadding - chartBottomPadding;
+  const baselineY = chartTopPadding + innerHeight;
+  const maxValue = getNiceChartMax(Math.max(...values, 1));
+  const points = values.map((value, index) => ({
+    x:
+      values.length === 1
+        ? chartWidth / 2
+        : chartSidePadding + ((chartWidth - chartSidePadding * 2) / Math.max(values.length - 1, 1)) * index,
+    y: baselineY - (value / maxValue) * innerHeight,
+    value,
+    label: labels[index] || `M${index + 1}`,
+    key: `${labels[index] || index}`,
+  }));
+  const linePath = createSmoothLinePath(points);
+  const yTicks = [maxValue, maxValue * 0.75, maxValue * 0.5, maxValue * 0.25, 0];
+
+  useEffect(() => {
+    setChartInteraction(null);
+  }, [lineData]);
+
+  const showChartInteraction = useCallback(
+    (touchX, touchY) => {
+      const nextInteraction = getInteractiveAnalyticsState({
+        data: values,
+        chartWidth,
+        maxValue,
+        touchX,
+        touchY,
+        chartHeight,
+        chartTopPadding,
+        chartBottomPadding,
+        chartSidePadding,
+      });
+
+      if (!nextInteraction) {
+        return;
+      }
+
+      setChartInteraction((current) => {
+        if (!current) {
+          tooltipOpacity.stopAnimation();
+          tooltipScale.stopAnimation();
+          tooltipOpacity.setValue(0);
+          tooltipScale.setValue(0.96);
+          Animated.parallel([
+            Animated.spring(tooltipOpacity, {
+              toValue: 1,
+              useNativeDriver: true,
+              tension: 180,
+              friction: 16,
+            }),
+            Animated.spring(tooltipScale, {
+              toValue: 1,
+              useNativeDriver: true,
+              tension: 180,
+              friction: 16,
+            }),
+          ]).start();
+        }
+
+        tooltipTranslate.setValue({
+          x: nextInteraction.tooltipLeft,
+          y: nextInteraction.tooltipTop,
+        });
+
+        return nextInteraction;
+      });
+    },
+    [
+      chartBottomPadding,
+      chartHeight,
+      chartTopPadding,
+      chartWidth,
+      maxValue,
+      tooltipOpacity,
+      tooltipScale,
+      tooltipTranslate,
+      values,
+    ]
+  );
+
+  const clearChartInteraction = useCallback(() => {
+    setChartInteraction((current) => {
+      if (current) {
+        tooltipOpacity.stopAnimation();
+        tooltipScale.stopAnimation();
+        Animated.parallel([
+          Animated.timing(tooltipOpacity, {
+            toValue: 0,
+            duration: 120,
+            useNativeDriver: true,
+          }),
+          Animated.timing(tooltipScale, {
+            toValue: 0.96,
+            duration: 120,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
+
+      return null;
+    });
+  }, [tooltipOpacity, tooltipScale]);
+
+  const chartPanResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (evt) => {
+          showChartInteraction(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+        },
+        onPanResponderMove: (evt) => {
+          showChartInteraction(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+        },
+        onPanResponderRelease: clearChartInteraction,
+        onPanResponderTerminate: clearChartInteraction,
+      }),
+    [clearChartInteraction, showChartInteraction]
+  );
+
+  return (
+    <View style={styles.trendWrap}>
+      <View style={styles.trendYAxis}>
+        {yTicks.map((tick) => (
+          <Text key={tick} style={styles.trendTick}>
+            {formatCurrency(tick)}
+          </Text>
+        ))}
+      </View>
+
+      <View style={styles.trendPlotWrap}>
+        <Svg width={chartWidth} height={chartHeight}>
+          {yTicks.slice(0, -1).map((tick) => {
+            const y = chartTopPadding + innerHeight * (1 - tick / maxValue);
+            return <Line key={tick} x1={chartSidePadding} y1={y} x2={chartWidth - chartSidePadding} y2={y} stroke="#5b433c" strokeWidth="1" />;
+          })}
+
+          <Path
+            d={linePath}
+            fill="none"
+            stroke="#f5b38a"
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+
+          {points.map((point) => (
+            <Circle key={point.key} cx={point.x} cy={point.y} r="4.5" fill="#f8efe9" stroke="#f5b38a" strokeWidth="2" />
+          ))}
+
+          {chartInteraction ? (
+            <>
+              <Line
+                x1={chartInteraction.pointX}
+                y1={chartTopPadding}
+                x2={chartInteraction.pointX}
+                y2={baselineY}
+                stroke="#f5b38a"
+                strokeOpacity="0.28"
+                strokeWidth="2"
+                strokeDasharray="5 6"
+              />
+              <Circle cx={chartInteraction.pointX} cy={chartInteraction.pointY} r="8" fill="#f5b38a" fillOpacity="0.16" />
+              <Circle cx={chartInteraction.pointX} cy={chartInteraction.pointY} r="4" fill="#f8efe9" stroke="#f5b38a" strokeWidth="2" />
+            </>
+          ) : null}
+        </Svg>
+
+        <View style={styles.trendGestureLayer} {...chartPanResponder.panHandlers} />
+
+        {chartInteraction ? (
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              styles.trendTooltip,
+              {
+                opacity: tooltipOpacity,
+                transform: [
+                  { translateX: tooltipTranslate.x },
+                  { translateY: tooltipTranslate.y },
+                  { scale: tooltipScale },
+                ],
+              },
+            ]}
+          >
+            <Text style={styles.trendTooltipLabel}>{labels[chartInteraction.index] || "Month"}</Text>
+            <Text style={styles.trendTooltipText}>Spent {formatCurrency(values[chartInteraction.index])}</Text>
+          </Animated.View>
+        ) : null}
+
+        <View style={[styles.trendLabelsRow, { width: chartWidth, paddingHorizontal: chartSidePadding }]}>
+          {labels.map((label, index) => (
+            <Text
+              key={label || index}
+              style={[
+                styles.trendLabel,
+                {
+                  textAlign: index === 0 ? "left" : index === labels.length - 1 ? "right" : "center",
+                },
+              ]}
+            >
+              {label}
+            </Text>
+          ))}
+        </View>
+      </View>
+    </View>
+  );
+}
+
 export default function AnalyticsScreen() {
   const [loading, setLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
@@ -381,27 +697,7 @@ export default function AnalyticsScreen() {
         <View style={styles.bigCard}>
           <Text style={styles.heading}>Monthly Overview</Text>
 
-          <LineChart
-            data={analytics.lineData}
-            width={CHART_WIDTH}
-            height={260}
-            fromZero
-            chartConfig={{
-              backgroundColor: colors.card,
-              backgroundGradientFrom: colors.card,
-              backgroundGradientTo: colors.card,
-              decimalPlaces: 0,
-              color: () => "#f5b38a",
-              labelColor: () => "#c6b9b0",
-              propsForDots: {
-                r: "4",
-                strokeWidth: "2",
-                stroke: "#f5b38a",
-              },
-            }}
-            style={styles.chart}
-            bezier
-          />
+          <AnalyticsTrendChart lineData={analytics.lineData} />
         </View>
 
         <View style={styles.bigCard}>
@@ -602,9 +898,71 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
   },
-  chart: {
-    borderRadius: 12,
-    marginTop: 10,
+  trendWrap: {
+    minHeight: 280,
+  },
+  trendYAxis: {
+    position: "absolute",
+    left: 0,
+    top: 10,
+    bottom: 30,
+    justifyContent: "space-between",
+    zIndex: 2,
+  },
+  trendTick: {
+    color: "#c6b9b0",
+    fontSize: 11,
+    fontWeight: "700",
+    width: 44,
+    textAlign: "right",
+  },
+  trendPlotWrap: {
+    marginLeft: 52,
+    position: "relative",
+    overflow: "hidden",
+  },
+  trendGestureLayer: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 5,
+  },
+  trendTooltip: {
+    position: "absolute",
+    width: 172,
+    minHeight: 86,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 18,
+    backgroundColor: "rgba(29, 18, 13, 0.95)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 194, 171, 0.22)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+    elevation: 6,
+    zIndex: 10,
+  },
+  trendTooltipLabel: {
+    color: "#f8efe9",
+    fontSize: 12,
+    fontWeight: "800",
+    marginBottom: 8,
+  },
+  trendTooltipText: {
+    color: "#d5c8be",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  trendLabelsRow: {
+    flexDirection: "row",
+    marginTop: 6,
+  },
+  trendLabel: {
+    flex: 1,
+    color: "#c6b9b0",
+    fontSize: 10,
+    fontWeight: "700",
+    textAlign: "center",
   },
   predictionCard: {
     paddingVertical: 12,

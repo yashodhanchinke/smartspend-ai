@@ -13,6 +13,21 @@ const PERIODS = ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"];
 function formatDate(date) { return new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", year: "numeric" }).format(date); }
 function formatTime(date) { return new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit" }).format(date); }
 
+async function broadcastRecurringRefresh(userId) {
+  if (!userId) {
+    return;
+  }
+
+  try {
+    await supabase.channel(`user-realtime-${userId}`).send({
+      type: "broadcast",
+      event: "refresh",
+    });
+  } catch (error) {
+    console.warn("Could not broadcast recurring refresh:", error.message);
+  }
+}
+
 export default function AddRecurringScreen({ navigation, route }) {
   const recurringItem = route?.params?.recurring || null;
   const isEditMode = route?.name === "UpdateRecurring" || Boolean(recurringItem?.id);
@@ -83,6 +98,7 @@ export default function AddRecurringScreen({ navigation, route }) {
         ? await supabase.from("recurring_transactions").update(payload).eq("id", recurringItem.id).eq("user_id", user.id)
         : await supabase.from("recurring_transactions").insert([payload]);
       if (error) throw error;
+      await broadcastRecurringRefresh(user.id);
       Alert.alert("Success", isEditMode ? "Recurring transaction updated." : "Recurring transaction added.");
       navigation.goBack();
     } catch (error) {

@@ -1,4 +1,4 @@
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -344,9 +344,8 @@ export default function AccountsScreen({ navigation, route }) {
                   categoryIcon={transaction.categories?.icon || "bank-transfer"}
                   showDivider={index !== transactions.length - 1}
                   onPress={() =>
-                    navigation.navigate("UpdateTransaction", {
+                    navigation.navigate("TransactionDetails", {
                       transaction,
-                      returnTab: "Accounts",
                     })
                   }
                 />

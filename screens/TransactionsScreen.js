@@ -343,9 +343,8 @@ export default function TransactionsScreen({ navigation, route }) {
                       categoryIcon={item.categories?.icon || "credit-card-outline"}
                       showDivider={index !== group.items.length - 1}
                       onPress={() =>
-                        navigation.navigate("UpdateTransaction", {
+                        navigation.navigate("TransactionDetails", {
                           transaction: item,
-                          returnTab: "Home",
                         })
                       }
                     />

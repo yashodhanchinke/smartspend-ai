@@ -430,7 +430,12 @@ export default function HomeScreen({ navigation, route }) {
       }
 
       summary.totalTransactions += 1;
-      summary.totalAmount += Math.abs(Number(linkedTransaction.amount || 0));
+      const amount = Number(linkedTransaction.amount || 0);
+      if (linkedTransaction.type === "expense") {
+        summary.totalAmount -= amount;
+      } else if (linkedTransaction.type === "income") {
+        summary.totalAmount += amount;
+      }
     });
 
     setLabelSummaries([...labelSummaryMap.values()]);
@@ -801,6 +806,7 @@ export default function HomeScreen({ navigation, route }) {
             navigation={navigation}
             variant="goals"
             goals={goals}
+            transactions={transactions}
           />
           <SectionCard
             icon="tag"
@@ -881,9 +887,8 @@ export default function HomeScreen({ navigation, route }) {
               categoryIcon={t.categories?.icon || "credit-card"}
               showDivider={index !== transactions.length - 1}
               onPress={() =>
-                navigation.navigate("UpdateTransaction", {
+                navigation.navigate("TransactionDetails", {
                   transaction: t,
-                  returnTab: "Home",
                 })
               }
             />
@@ -928,6 +933,7 @@ function SectionCard({
   labels,
   loans,
   recurringTransactions,
+  transactions,
   topCategories,
   title,
   variant,
@@ -973,12 +979,36 @@ function SectionCard({
 
     if (variant === "goals") {
       const trackedGoals = goals || [];
-      const activeGoals = trackedGoals.filter(
-        (goal) => Number(goal.current_amount || 0) < Number(goal.target_amount || 0)
+      const goalTransactions = transactions || [];
+      const goalSummaries = trackedGoals.map((goal) => {
+        const target = Number(goal.target_amount || 0);
+        const linkedTransactions = goalTransactions.filter((transaction) => transaction.goal_id === goal.id);
+        const signedSavedAmount = linkedTransactions.reduce((sum, transaction) => {
+          const amount = Number(transaction.amount || 0);
+
+          if (transaction.type === "expense") {
+            return sum - amount;
+          }
+
+          if (transaction.type === "income") {
+            return sum + amount;
+          }
+
+          return sum;
+        }, 0);
+
+        return {
+          ...goal,
+          savedAmount: linkedTransactions.length ? signedSavedAmount : Number(goal.current_amount || 0),
+          targetAmount: target,
+        };
+      });
+      const activeGoals = goalSummaries.filter(
+        (goal) => goal.savedAmount < goal.targetAmount
       );
       const completedGoals = trackedGoals.length - activeGoals.length;
-      const totalTarget = activeGoals.reduce((sum, goal) => sum + Number(goal.target_amount || 0), 0);
-      const totalCurrent = activeGoals.reduce((sum, goal) => sum + Number(goal.current_amount || 0), 0);
+      const totalTarget = activeGoals.reduce((sum, goal) => sum + Number(goal.targetAmount || 0), 0);
+      const totalCurrent = activeGoals.reduce((sum, goal) => sum + Number(goal.savedAmount || 0), 0);
 
       if (!trackedGoals.length) {
         return (
